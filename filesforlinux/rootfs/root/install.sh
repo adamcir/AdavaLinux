@@ -517,16 +517,16 @@ terminal_output console
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi quiet
-		initrd /boot/initramfs-disk.gz
-	echo 'Booting ...'
+	linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi quiet
+	echo 'Loading initramfs...'
+	initrd /boot/initramfs-disk.gz
 }
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi
-		initrd /boot/initramfs-disk.gz
-	echo 'Booting ...'
+	linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi
+	echo 'Loading initramfs...'
+	initrd /boot/initramfs-disk.gz
 }
 EOF
 else
@@ -538,16 +538,16 @@ terminal_output console
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq quiet
-		initrd /boot/initramfs-disk.gz
-	echo 'Booting ...'
+	linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq quiet
+	echo 'Loading initramfs...'
+	initrd /boot/initramfs-disk.gz
 }
 
 menuentry "AdavaLinux v1.0 (debug)" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq
-		initrd /boot/initramfs-disk.gz
-	echo 'Booting ...'
+	linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq
+	echo 'Loading initramfs...'
+	initrd /boot/initramfs-disk.gz
 }
 EOF
 fi
