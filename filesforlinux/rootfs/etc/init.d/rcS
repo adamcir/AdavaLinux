@@ -1,0 +1,27 @@
+#!/bin/sh
+
+[ -f /etc/hostname ] && hostname -F /etc/hostname 2>/dev/null || true
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+if command -v udhcpc >/dev/null 2>&1; then
+  ip link set eth0 up 2>/dev/null || true
+  sleep 1
+  (
+    while :; do
+      udhcpc -i eth0 -s /usr/share/udhcpc/default.script -n -q -T 2 -t 3 2>/dev/null && break
+      sleep 5
+    done
+  ) &
+fi
+
+if [ -c /dev/tty1 ]; then
+  sleep 2
+  printf '\033c' > /dev/tty1
+  [ -f /etc/motd ] && cat /etc/motd > /dev/tty1
+fi
+
+if [ -c /dev/ttyS0 ]; then
+  sleep 2
+  printf '\033c' > /dev/ttyS0
+  [ -f /etc/motd ] && cat /etc/motd > /dev/ttyS0
+fi

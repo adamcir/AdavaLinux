@@ -1,0 +1,26 @@
+#!/bin/sh
+
+case "$1" in
+  deconfig)
+    ip addr flush dev "$interface" 2>/dev/null
+    ip link set "$interface" up 2>/dev/null
+    ;;
+  renew|bound)
+    ip addr flush dev "$interface" 2>/dev/null
+    ip addr add "$ip/$mask" dev "$interface"
+    ip link set "$interface" up 2>/dev/null
+    if [ -n "$router" ]; then
+      ip route add default via "$router" dev "$interface" 2>/dev/null || \
+      ip route replace default via "$router" dev "$interface"
+    fi
+    if [ -n "$dns" ]; then
+      mkdir -p /etc
+      : > /etc/resolv.conf
+      for d in $dns; do
+        echo "nameserver $d" >> /etc/resolv.conf
+      done
+    fi
+    ;;
+esac
+
+exit 0

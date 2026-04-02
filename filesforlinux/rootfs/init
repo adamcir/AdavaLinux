@@ -1,0 +1,23 @@
+#!/bin/sh
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export TERM=linux
+
+mount -t proc none /proc 2>/dev/null
+mount -t sysfs none /sys 2>/dev/null
+if ! awk '$2=="/dev"{found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+  mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs none /dev 2>/dev/null
+fi
+mdev -s 2>/dev/null || true
+[ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -c /dev/tty ] || mknod -m 666 /dev/tty c 5 0
+[ -c /dev/tty1 ] || mknod -m 600 /dev/tty1 c 4 1
+[ -c /dev/ttyS0 ] || mknod -m 600 /dev/ttyS0 c 4 64
+
+if [ -c /dev/console ]; then
+  exec </dev/console >/dev/console 2>&1
+else
+  exec </dev/null >/dev/null 2>&1
+fi
+
+exec /sbin/init

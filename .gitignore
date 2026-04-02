@@ -1,0 +1,7 @@
+*
+!/.gitignore
+!build.sh
+!docs/
+!docs/**
+!filesforlinux/
+!filesforlinux/**

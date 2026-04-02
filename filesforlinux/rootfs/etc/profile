@@ -1,0 +1,4 @@
+if [ -t 1 ]; then
+  printf '\033c'
+  [ -f /etc/motd ] && cat /etc/motd
+fi
