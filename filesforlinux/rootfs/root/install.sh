@@ -330,7 +330,7 @@ safe_umount /mnt/install
 MEDIA_DEV=""
 MOUNTED_DEV="$(mount_dev /mnt/install)"
 if [ -n "$MOUNTED_DEV" ]; then
-  if [ -f /mnt/install/boot/initramfs.gz ]; then
+  if [ -f /mnt/install/boot/initramfs-installer.gz ]; then
     MEDIA_DEV="$MOUNTED_DEV"
   else
     safe_umount /mnt/install
@@ -341,7 +341,7 @@ if [ "$INSTALL_MEDIA" = "auto" ]; then
     for cand in /dev/sr0 /dev/sda1 /dev/sda; do
       [ -b "$cand" ] || continue
       if mount -o ro "$cand" /mnt/install 2>/dev/null; then
-        if [ -f /mnt/install/boot/initramfs.gz ]; then
+        if [ -f /mnt/install/boot/initramfs-installer.gz ]; then
           MEDIA_DEV="$cand"
           break
         fi
@@ -461,11 +461,13 @@ ROOT_DEV="$PART"
 echo "[6/10] extracting initramfs to disk"
 rm -rf /mnt/root/*
 cd /mnt/root
-gzip -dc /mnt/install/boot/initramfs.gz | cpio -idmv
+gzip -dc /mnt/install/boot/initramfs-installer.gz | cpio -idmv
 rm -f /mnt/root/install.sh 2>/dev/null || true
 if [ -x /mnt/root/bin/busybox ]; then
   /mnt/root/bin/busybox --install -s /mnt/root/bin
 fi
+mkdir -p /mnt/root/boot
+cp /mnt/install/boot/initramfs-disk.gz /mnt/root/boot/initramfs-disk.gz
 
 echo "[6a/10] creating user account"
 prompt_user_account
@@ -480,7 +482,6 @@ fi
 write_user_files /mnt/root "$NEW_USER" "$USER_HASH" "$ROOT_HASH" "$HOST_NAME"
 
 echo "[7/10] copying kernel"
-mkdir -p /mnt/root/boot
 KERNEL_NAME=""
 for cand in "vmlinuz-$K_VERSION" "vmlinuz-$K_VERSION.gz"; do
   if [ -f "/mnt/install/boot/$cand" ]; then
@@ -516,13 +517,15 @@ terminal_output console
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=tty1 console=ttyS0 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi quiet
+		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi quiet
+		initrd /boot/initramfs-disk.gz
 	echo 'Booting ...'
 }
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=tty1 console=ttyS0 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi
+		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq acpi=off noapic nolapic irqpoll pci=nomsi
+		initrd /boot/initramfs-disk.gz
 	echo 'Booting ...'
 }
 EOF
@@ -535,13 +538,15 @@ terminal_output console
 
 menuentry "AdavaLinux v1.0" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=tty1 console=ttyS0 nomodeset libata.force=noncq quiet
+		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq quiet
+		initrd /boot/initramfs-disk.gz
 	echo 'Booting ...'
 }
 
 menuentry "AdavaLinux v1.0 (debug)" {
 	echo 'Loading Linux ...'
-		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=tty1 console=ttyS0 nomodeset libata.force=noncq
+		linux /boot/$KERNEL_NAME $ROOT_ARG rootfstype=$FS_TYPE rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq
+		initrd /boot/initramfs-disk.gz
 	echo 'Booting ...'
 }
 EOF

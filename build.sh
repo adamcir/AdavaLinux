@@ -4,6 +4,7 @@ set -eu
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$PROJECT_DIR/out"
 ROOTFS_DIR="$PROJECT_DIR/rootfs"
+DISK_INITRAMFS_DIR="$PROJECT_DIR/disk-initramfs"
 ISO_DIR="$PROJECT_DIR/iso"
 ISO_OUT_BIOS="$OUT_DIR/adavalinux-bios.iso"
 ISO_OUT_UEFI="$OUT_DIR/adavalinux-uefi.iso"
@@ -12,7 +13,10 @@ TOOLCACHE_DIR="$PROJECT_DIR/.toolcache"
 KERNEL_DIR="$PROJECT_DIR/linux-6.18.8"
 BUSYBOX_DIR="$PROJECT_DIR/busybox-1.36.1"
 FILESFORLINUX_ROOTFS_DIR="$PROJECT_DIR/filesforlinux/rootfs"
+FILESFORLINUX_DISK_INITRAMFS_DIR="$PROJECT_DIR/filesforlinux/initramfs-disk"
 FILESFORLINUX_ISO_DIR="$PROJECT_DIR/filesforlinux/iso"
+OUT_INSTALLER_INITRAMFS_NAME="initramfs-installer.gz"
+OUT_DISK_INITRAMFS_NAME="initramfs-disk.gz"
 
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"
@@ -293,8 +297,8 @@ say "Target:   $TARGET_ARCH"
 say "Cross:    ${CROSS_COMPILE:-<native>}"
 say "Sysroot:  ${SYSPCKG_SYSROOT:-<auto>}"
 
-say "Cleaning generated outputs (out/, iso/, rootfs/)"
-rm -rf "$OUT_DIR" "$ISO_DIR" "$ROOTFS_DIR"
+say "Cleaning generated outputs (out/, iso/, rootfs/, disk-initramfs/)"
+rm -rf "$OUT_DIR" "$ISO_DIR" "$ROOTFS_DIR" "$DISK_INITRAMFS_DIR"
 mkdir -p "$OUT_DIR"
 
 say "Building kernel ($OUT_KERNEL_NAME)"
@@ -339,6 +343,13 @@ mkdir -p "$ROOTFS_DIR/bin" "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/etc" \
          "$ROOTFS_DIR/root"
 chmod 1777 "$ROOTFS_DIR/tmp"
 
+say "Preparing disk initramfs layout"
+mkdir -p "$DISK_INITRAMFS_DIR/bin" "$DISK_INITRAMFS_DIR/sbin" \
+         "$DISK_INITRAMFS_DIR/proc" "$DISK_INITRAMFS_DIR/sys" \
+         "$DISK_INITRAMFS_DIR/dev" "$DISK_INITRAMFS_DIR/newroot" \
+         "$DISK_INITRAMFS_DIR/tmp"
+chmod 1777 "$DISK_INITRAMFS_DIR/tmp"
+
 say "Building BusyBox (static) and installing to rootfs"
 cd "$BUSYBOX_DIR"
 bbmake distclean
@@ -363,15 +374,20 @@ fi
 bbmake oldconfig
 bbmake -j"$JOBS"
 bbmake CONFIG_PREFIX="$ROOTFS_DIR" install
+bbmake CONFIG_PREFIX="$DISK_INITRAMFS_DIR" install
 
 say "Copying rootfs templates from filesforlinux"
 [ -d "$FILESFORLINUX_ROOTFS_DIR" ] || die "Rootfs template directory not found: $FILESFORLINUX_ROOTFS_DIR"
 cp -a "$FILESFORLINUX_ROOTFS_DIR/." "$ROOTFS_DIR/"
+[ -d "$FILESFORLINUX_DISK_INITRAMFS_DIR" ] || die "disk initramfs template directory not found: $FILESFORLINUX_DISK_INITRAMFS_DIR"
+cp -a "$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$DISK_INITRAMFS_DIR/"
 
 for req in etc/os-release init etc/motd etc/profile etc/inittab etc/init.d/rcS usr/share/udhcpc/default.script; do
   [ -f "$ROOTFS_DIR/$req" ] || die "Required file missing in rootfs templates: $req"
 done
 chmod +x "$ROOTFS_DIR/init" "$ROOTFS_DIR/etc/init.d/rcS" "$ROOTFS_DIR/usr/share/udhcpc/default.script"
+[ -f "$DISK_INITRAMFS_DIR/init" ] || die "Required file missing in disk initramfs templates: init"
+chmod +x "$DISK_INITRAMFS_DIR/init"
 
 say "Installing Syspckg and bundled packages into rootfs"
 
@@ -440,9 +456,13 @@ else
   say "syspckg-source not found in filesforlinux/rootfs/etc -> using syspckg built-in default URL"
 fi
 
-say "Packing initramfs.gz"
+say "Packing $OUT_INSTALLER_INITRAMFS_NAME"
 cd "$ROOTFS_DIR"
-find . -print0 | cpio --null -ov --format=newc | gzip -9 > "$OUT_DIR/initramfs.gz"
+find . -print0 | cpio --null -ov --format=newc | gzip -9 > "$OUT_DIR/$OUT_INSTALLER_INITRAMFS_NAME"
+
+say "Packing $OUT_DISK_INITRAMFS_NAME"
+cd "$DISK_INITRAMFS_DIR"
+find . -print0 | cpio --null -ov --format=newc | gzip -9 > "$OUT_DIR/$OUT_DISK_INITRAMFS_NAME"
 
 say "Copying kernel image"
 cp -f "$KERNEL_IMAGE" "$OUT_DIR/$OUT_KERNEL_NAME"
@@ -450,7 +470,8 @@ cp -f "$KERNEL_IMAGE" "$OUT_DIR/$OUT_KERNEL_NAME"
 say "Building ISO (GRUB)"
 mkdir -p "$ISO_DIR/boot/grub"
 cp -f "$OUT_DIR/$OUT_KERNEL_NAME" "$ISO_DIR/boot/$OUT_KERNEL_NAME"
-cp -f "$OUT_DIR/initramfs.gz" "$ISO_DIR/boot/initramfs.gz"
+cp -f "$OUT_DIR/$OUT_INSTALLER_INITRAMFS_NAME" "$ISO_DIR/boot/$OUT_INSTALLER_INITRAMFS_NAME"
+cp -f "$OUT_DIR/$OUT_DISK_INITRAMFS_NAME" "$ISO_DIR/boot/$OUT_DISK_INITRAMFS_NAME"
 if [ -f "$FILESFORLINUX_ISO_DIR/install.sh" ]; then
   cp -f "$FILESFORLINUX_ISO_DIR/install.sh" "$ISO_DIR/install.sh"
 else
@@ -486,9 +507,13 @@ else
   die "grub-mkrescue is missing. Cannot create ISO."
 fi
 
-say "Sanity check: init + bin/sh in initramfs"
-gzip -dc "$OUT_DIR/initramfs.gz" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null \
-  || die "Initramfs does not contain init or bin/sh"
+say "Sanity check: installer initramfs contains init + bin/sh"
+gzip -dc "$OUT_DIR/$OUT_INSTALLER_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null \
+  || die "Installer initramfs does not contain init or bin/sh"
+
+say "Sanity check: disk initramfs contains init + bin/sh"
+gzip -dc "$OUT_DIR/$OUT_DISK_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null \
+  || die "Disk initramfs does not contain init or bin/sh"
 
 cat <<EOF
 

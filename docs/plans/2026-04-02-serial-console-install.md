@@ -1,5 +1,7 @@
 # Serial Console Install Implementation Plan
 
+> Current worktree status is tracked in [2026-04-02-boot-console-worktree-state.md](/home/adam/Dokumenty/Projekty/Linux/AdavaLinux/docs/plans/2026-04-02-boot-console-worktree-state.md). This plan predates the later console-order change and the initramfs fallback console work.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make installed AdavaLinux usable in `qemu -nographic` by enabling serial console login and serial kernel output without removing VGA console support.

@@ -1,0 +1,142 @@
+#!/bin/sh
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export TERM=linux
+
+write_fallback_line() {
+  line="$1"
+
+  if [ -c /dev/tty1 ]; then
+    printf "%s\n" "$line" > /dev/tty1
+  elif [ -c /dev/ttyS0 ]; then
+    printf "%s\n" "$line" > /dev/ttyS0
+  else
+    printf "%s\n" "$line"
+  fi
+}
+
+panic_shell() {
+  reason="$1"
+
+  write_fallback_line ""
+  write_fallback_line "==============[AdavaLinux Initramfs Fallback]==============="
+  write_fallback_line "AdavaLinux by Adava in 2026"
+  write_fallback_line "$reason"
+  write_fallback_line "The system is still running from initramfs."
+  write_fallback_line "============================================================"
+  write_fallback_line ""
+
+  export PS1='[initramfs-fallback] # '
+  if [ -c /dev/tty1 ] && [ -c /dev/ttyS0 ] && command -v setsid >/dev/null 2>&1; then
+    setsid sh </dev/ttyS0 >/dev/ttyS0 2>&1 &
+  fi
+  if [ -c /dev/tty1 ]; then
+    exec sh </dev/tty1 >/dev/tty1 2>&1
+  fi
+  if [ -c /dev/ttyS0 ]; then
+    exec sh </dev/ttyS0 >/dev/ttyS0 2>&1
+  fi
+  exec sh
+}
+
+mount_essential_fs() {
+  mount -t proc none /proc 2>/dev/null || true
+  mount -t sysfs none /sys 2>/dev/null || true
+  if ! awk '$2=="/dev"{found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs none /dev 2>/dev/null || return 1
+  fi
+  mdev -s 2>/dev/null || true
+  [ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+  [ -c /dev/tty ] || mknod -m 666 /dev/tty c 5 0
+  [ -c /dev/tty1 ] || mknod -m 600 /dev/tty1 c 4 1
+  [ -c /dev/ttyS0 ] || mknod -m 600 /dev/ttyS0 c 4 64
+}
+
+parse_cmdline() {
+  ROOT_ARG=""
+  ROOT_FSTYPE=""
+
+  for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in
+      root=*)
+        ROOT_ARG="${arg#root=}"
+        ;;
+      rootfstype=*)
+        ROOT_FSTYPE="${arg#rootfstype=}"
+        ;;
+    esac
+  done
+}
+
+resolve_root_spec() {
+  case "$ROOT_ARG" in
+    UUID=*)
+      command -v blkid >/dev/null 2>&1 || return 1
+      blkid -U "${ROOT_ARG#UUID=}" 2>/dev/null || return 1
+      ;;
+    LABEL=*)
+      command -v blkid >/dev/null 2>&1 || return 1
+      blkid -L "${ROOT_ARG#LABEL=}" 2>/dev/null || return 1
+      ;;
+    *)
+      printf "%s\n" "$ROOT_ARG"
+      ;;
+  esac
+}
+
+wait_for_root() {
+  root_dev="$1"
+  count=0
+
+  case "$root_dev" in
+    /dev/*)
+      while [ ! -b "$root_dev" ] && [ "$count" -lt 10 ]; do
+        mdev -s 2>/dev/null || true
+        sleep 1
+        count=$((count + 1))
+      done
+      [ -b "$root_dev" ]
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+mount_root() {
+  root_dev="$1"
+  mkdir -p /newroot
+
+  if [ -n "$ROOT_FSTYPE" ]; then
+    mount -t "$ROOT_FSTYPE" "$root_dev" /newroot
+  else
+    mount "$root_dev" /newroot
+  fi
+}
+
+move_mounts_to_newroot() {
+  mkdir -p /newroot/dev /newroot/proc /newroot/sys
+  mount --move /dev /newroot/dev || return 1
+  mount --move /proc /newroot/proc || return 1
+  mount --move /sys /newroot/sys || return 1
+}
+
+mount_essential_fs || panic_shell "Failed to mount essential pseudo filesystems."
+
+if [ -c /dev/console ]; then
+  exec </dev/console >/dev/console 2>&1
+fi
+
+parse_cmdline
+[ -n "$ROOT_ARG" ] || panic_shell "Missing root= kernel parameter."
+ROOT_DEV="$(resolve_root_spec || true)"
+[ -n "$ROOT_DEV" ] || panic_shell "Could not resolve root specification $ROOT_ARG."
+
+echo "initramfs: preparing root filesystem $ROOT_DEV"
+wait_for_root "$ROOT_DEV" || panic_shell "Root device $ROOT_DEV did not appear."
+mount_root "$ROOT_DEV" || panic_shell "Failed to mount root filesystem $ROOT_DEV."
+[ -x /newroot/sbin/init ] || panic_shell "Mounted root does not contain /sbin/init."
+move_mounts_to_newroot || panic_shell "Failed to hand off /dev, /proc, or /sys to the real root."
+
+echo "initramfs: switching to real root"
+exec switch_root /newroot /sbin/init
