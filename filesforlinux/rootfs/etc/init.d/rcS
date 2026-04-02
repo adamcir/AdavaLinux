@@ -13,15 +13,3 @@ if command -v udhcpc >/dev/null 2>&1; then
     done
   ) &
 fi
-
-if [ -c /dev/tty1 ]; then
-  sleep 2
-  printf '\033c' > /dev/tty1
-  [ -f /etc/motd ] && cat /etc/motd > /dev/tty1
-fi
-
-if [ -c /dev/ttyS0 ]; then
-  sleep 2
-  printf '\033c' > /dev/ttyS0
-  [ -f /etc/motd ] && cat /etc/motd > /dev/ttyS0
-fi
