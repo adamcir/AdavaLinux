@@ -10,7 +10,7 @@ ISO_OUT_BIOS="$OUT_DIR/adavalinux-bios.iso"
 ISO_OUT_UEFI="$OUT_DIR/adavalinux-uefi.iso"
 TOOLCACHE_DIR="$PROJECT_DIR/.toolcache"
 
-KERNEL_DIR="$PROJECT_DIR/linux-6.18.8"
+KERNEL_DIR="$PROJECT_DIR/linux-6.19.11"
 BUSYBOX_DIR="$PROJECT_DIR/busybox-1.36.1"
 FILESFORLINUX_ROOTFS_DIR="$PROJECT_DIR/filesforlinux/rootfs"
 FILESFORLINUX_DISK_INITRAMFS_DIR="$PROJECT_DIR/filesforlinux/initramfs-disk"
@@ -313,7 +313,13 @@ if [ -f "$KERNEL_CFG_FRAGMENT" ]; then
   [ -x "$CFG_TOOL" ] || die "Missing kernel config tool: $CFG_TOOL"
   while IFS= read -r line; do
     case "$line" in
-      ""|\#*) continue ;;
+      "") continue ;;
+      \#\ CONFIG_*\ is\ not\ set)
+        opt="${line#\# }"
+        opt="${opt% is not set}"
+        "$CFG_TOOL" --disable "$opt"
+        ;;
+      \#*) continue ;;
       CONFIG_*=y)
         "$CFG_TOOL" --enable "${line%%=*}"
         ;;
