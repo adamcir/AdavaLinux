@@ -143,3 +143,5 @@ After installation, boot from the disk image:
 ```sh
 qemu-system-x86_64 -m 1024M -drive file=disk.qcow2,format=qcow2
 ```
+---
+*AdavaLinux - by adamcir (Adava) AdavaSoftware in 2026. The OS is under license GPLv2.0*
