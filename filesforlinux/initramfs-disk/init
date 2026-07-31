@@ -71,6 +71,12 @@ parse_cmdline() {
 resolve_root_spec() {
   case "$ROOT_ARG" in
     UUID=*)
+      case "${ROOT_ARG#UUID=}" in
+        /dev/*)
+          printf "%s\n" "${ROOT_ARG#UUID=}"
+          return 0
+          ;;
+      esac
       command -v blkid >/dev/null 2>&1 || return 1
       blkid -U "${ROOT_ARG#UUID=}" 2>/dev/null || return 1
       ;;

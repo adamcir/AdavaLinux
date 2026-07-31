@@ -160,9 +160,13 @@ Run: `sh build.sh`
 
 Expected: installer ISO contains installer initramfs, and output directory contains system initramfs artifact as a separate file.
 
-**Step 4: Commit**
+**Step 4: Final review**
 
-```bash
-git add build.sh filesforlinux/iso/boot/grub/grub.cfg filesforlinux/rootfs/root/install.sh filesforlinux/initramfs-system/init tests docs/plans
-git commit -m "feat: boot installed system via initramfs switch_root"
-```
+Confirm the modified files are limited to the intended scope:
+
+- `build.sh`
+- `filesforlinux/iso/boot/grub/grub.cfg`
+- `filesforlinux/rootfs/root/install.sh`
+- `filesforlinux/initramfs-system/init`
+- relevant test files
+- related planning docs

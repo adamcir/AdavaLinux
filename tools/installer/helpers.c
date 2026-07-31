@@ -1,0 +1,191 @@
+#include "installer.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <string.h>
+
+static int has_prefix(const char *s, const char *prefix)
+{
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+int installer_valid_username(const char *name)
+{
+    size_t i;
+
+    if (name == NULL || name[0] == '\0' || strcmp(name, "root") == 0) {
+        return 0;
+    }
+
+    for (i = 0; name[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (!(islower(c) || isdigit(c) || c == '_' || c == '-')) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+int installer_supported_disk(const char *path)
+{
+    const char *name;
+    size_t len;
+
+    if (path == NULL || !has_prefix(path, "/dev/")) {
+        return 0;
+    }
+
+    name = path + 5;
+    len = strlen(name);
+
+    if (len == 3 && has_prefix(name, "sd") && name[2] >= 'a' && name[2] <= 'z') {
+        return 1;
+    }
+    if (len == 3 && has_prefix(name, "vd") && name[2] >= 'a' && name[2] <= 'z') {
+        return 1;
+    }
+    if (len == 4 && has_prefix(name, "xvd") && name[3] >= 'a' && name[3] <= 'z') {
+        return 1;
+    }
+    if (sscanf(name, "nvme%*un%*u") == 0 && has_prefix(name, "nvme")) {
+        unsigned int ctrl = 0;
+        unsigned int ns = 0;
+        char extra = 0;
+        return sscanf(name, "nvme%un%u%c", &ctrl, &ns, &extra) == 2;
+    }
+    if (has_prefix(name, "mmcblk")) {
+        unsigned int disk = 0;
+        char extra = 0;
+        return sscanf(name, "mmcblk%u%c", &disk, &extra) == 1;
+    }
+
+    return 0;
+}
+
+int installer_partition_path(const char *disk, int part_no, char *out, size_t out_size)
+{
+    int written;
+
+    if (disk == NULL || out == NULL || out_size == 0 || part_no <= 0) {
+        return -1;
+    }
+
+    if (strstr(disk, "/dev/nvme") == disk || strstr(disk, "/dev/mmcblk") == disk) {
+        written = snprintf(out, out_size, "%sp%d", disk, part_no);
+    } else {
+        written = snprintf(out, out_size, "%s%d", disk, part_no);
+    }
+
+    if (written < 0 || (size_t)written >= out_size) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int installer_build_root_arg(const char *root_dev, char *out, size_t out_size)
+{
+    int written;
+
+    if (root_dev == NULL || out == NULL || out_size == 0 || strncmp(root_dev, "/dev/", 5) != 0) {
+        return -1;
+    }
+
+    written = snprintf(out, out_size, "root=%s", root_dev);
+    if (written < 0 || (size_t)written >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
+int installer_should_redraw_progress_log(long now_ms, long last_draw_ms, long min_interval_ms)
+{
+    if (last_draw_ms <= 0 || now_ms < last_draw_ms) {
+        return 1;
+    }
+    return now_ms - last_draw_ms >= min_interval_ms;
+}
+
+void installer_format_progress_bar(int percent, int width, char *out, size_t out_size)
+{
+    int i;
+    int filled;
+    size_t pos = 0;
+
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    if (percent < 0) {
+        percent = 0;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
+    if (width < 0) {
+        width = 0;
+    }
+
+    filled = (percent * width + 50) / 100;
+
+    if (pos + 1 < out_size) {
+        out[pos++] = '[';
+    }
+    for (i = 0; i < width && pos + 1 < out_size; i++) {
+        out[pos++] = i < filled ? '#' : ' ';
+    }
+    if (pos + 1 < out_size) {
+        out[pos++] = ']';
+    }
+    if (pos < out_size) {
+        snprintf(out + pos, out_size - pos, " %d%%", percent);
+    } else {
+        out[out_size - 1] = '\0';
+    }
+}
+
+void installer_build_syspckg_install_argv(char *argv[6], const char *selector, int local_only)
+{
+    argv[0] = "syspckg";
+    argv[1] = "install";
+    argv[2] = (char *)selector;
+    if (local_only) {
+        argv[3] = "-local";
+        argv[4] = "-y";
+        argv[5] = NULL;
+    } else {
+        argv[3] = "-y";
+        argv[4] = NULL;
+        argv[5] = NULL;
+    }
+}
+
+int installer_valid_uuid_value(const char *value)
+{
+    size_t i;
+    int has_hex = 0;
+
+    if (value == NULL || value[0] == '\0') {
+        return 0;
+    }
+    if (strstr(value, "/dev/") != NULL) {
+        return 0;
+    }
+
+    for (i = 0; value[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (isspace(c)) {
+            return 0;
+        }
+        if (isxdigit(c)) {
+            has_hex = 1;
+            continue;
+        }
+        if (c == '-') {
+            continue;
+        }
+        return 0;
+    }
+
+    return has_hex;
+}

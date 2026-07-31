@@ -55,18 +55,28 @@ tar -xf busybox-1.36.1.tar.bz2
 
 ## Build
 
-Make the build script executable and run it:
+Build everything with Make:
 
 ```sh
-chmod +x build.sh
-./build.sh
+make all
 ```
 
 On `arm64`, use the cross toolchain explicitly:
 
 ```sh
-CROSS_COMPILE=x86_64-linux-gnu- ./build.sh
+CROSS_COMPILE=x86_64-linux-gnu- make all
 ```
+
+The build can also be run step by step:
+
+```sh
+make tools
+make kernel
+make busybox
+make iso
+```
+
+`make busybox` only compiles BusyBox. `make iso` installs BusyBox into the generated root filesystems, copies templates, packs both initramfs images, and creates the GRUB ISO outputs. Run `make kernel` and `make busybox` first when those artifacts are missing or stale.
 
 ## Output Files
 
@@ -83,51 +93,28 @@ After a successful build, the main artifacts are written to `out/`:
 ### BIOS ISO
 
 ```sh
-qemu-system-x86_64 -cdrom out/adavalinux-bios.iso -m 1024M
+make run-bios
 ```
 
 ### UEFI ISO
 
-Create a writable OVMF variable file once:
+Boot the UEFI ISO:
 
 ```sh
-cp /usr/share/OVMF/OVMF_VARS_4M.fd ./AdavaLinux_VARS.fd
+make run-uefi
 ```
 
-Then boot the UEFI ISO:
-
-```sh
-qemu-system-x86_64 \
-  -machine q35,accel=kvm \
-  -cpu host \
-  -m 1024 \
-  -device virtio-vga \
-  -display gtk \
-  -serial stdio \
-  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-  -drive if=pflash,format=raw,file=./AdavaLinux_VARS.fd \
-  -cdrom out/adavalinux-uefi.iso \
-  -boot d
-```
+The Makefile creates separate writable OVMF variable files in `out/` for ISO, install, and HDD boot targets.
 
 If KVM is not available, remove `,accel=kvm` and `-cpu host`.
 
 ## Install to a QEMU Disk
 
-Create a qcow2 disk:
+Boot the installer ISO with the target disk attached. The disk image is created automatically if it does not exist:
 
 ```sh
-qemu-img create -f qcow2 disk.qcow2 2G
-```
-
-Boot the installer ISO with the target disk attached:
-
-```sh
-qemu-system-x86_64 \
-  -m 1024M \
-  -drive file=disk.qcow2,format=qcow2 \
-  -cdrom out/adavalinux-bios.iso \
-  -boot d
+make run-bios-install
+make run-uefi-install
 ```
 
 Inside AdavaLinux, run the installer:
@@ -141,7 +128,13 @@ INSTALL_MEDIA=/dev/sdb DISK=/dev/sda ./install.sh
 After installation, boot from the disk image:
 
 ```sh
-qemu-system-x86_64 -m 1024M -drive file=disk.qcow2,format=qcow2
+make run-bios-hdd
+make run-uefi-hdd
 ```
+
+The BIOS and UEFI HDD boot targets use separate qcow2 images in `out/`:
+
+- `out/adavalinux-bios-hdd.qcow2`
+- `out/adavalinux-uefi-hdd.qcow2`
 ---
 *AdavaLinux - by adamcir (Adava) AdavaSoftware in 2026. The OS is under license GPLv2.0*
