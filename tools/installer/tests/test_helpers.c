@@ -62,6 +62,17 @@ static void test_root_arg_uses_device_path(void)
     assert(strcmp(out, "root=/dev/sda1") == 0);
 }
 
+static void test_fdisk_script_uses_part_size_for_bios_and_uefi(void)
+{
+    char out[256];
+
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_BIOS, "+20G", out, sizeof(out)) == 0);
+    assert(strcmp(out, "echo o; echo n; echo p; echo 1; echo 2048; echo '+20G'; echo a; echo 1; echo w") == 0);
+
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_UEFI, "+20G", out, sizeof(out)) == 0);
+    assert(strcmp(out, "echo o; echo n; echo p; echo 1; echo 2048; echo +512M; echo n; echo p; echo 2; echo 1050624; echo '+20G'; echo t; echo 1; echo ef; echo a; echo 1; echo w") == 0);
+}
+
 static void test_progress_log_redraw_throttle(void)
 {
     assert(installer_should_redraw_progress_log(1000, 0, 200) == 1);
@@ -107,6 +118,7 @@ int main(void)
     test_partition_paths();
     test_progress_bar();
     test_root_arg_uses_device_path();
+    test_fdisk_script_uses_part_size_for_bios_and_uefi();
     test_progress_log_redraw_throttle();
     test_syspckg_install_argv_order();
     test_uuid_value_validation();

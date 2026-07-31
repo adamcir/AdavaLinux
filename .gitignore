@@ -13,6 +13,8 @@
 !tools/installer/*.h
 !tools/installer/tests/
 !tools/installer/tests/*.c
+!tools/syspckg
+!tools/syspckg/main.c
 tools/installer/installer
 tools/installer/*.o
 tools/installer/tests/*.o

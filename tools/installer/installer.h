@@ -37,6 +37,10 @@ int installer_valid_username(const char *name);
 int installer_supported_disk(const char *path);
 int installer_partition_path(const char *disk, int part_no, char *out, size_t out_size);
 int installer_build_root_arg(const char *root_dev, char *out, size_t out_size);
+int installer_build_fdisk_script(InstallerBootMode boot_mode,
+                                const char *part_size,
+                                char *out,
+                                size_t out_size);
 void installer_format_progress_bar(int percent, int width, char *out, size_t out_size);
 int installer_should_redraw_progress_log(long now_ms, long last_draw_ms, long min_interval_ms);
 void installer_build_syspckg_install_argv(char *argv[6], const char *selector, int local_only);

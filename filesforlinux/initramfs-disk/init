@@ -20,7 +20,7 @@ panic_shell() {
 
   write_fallback_line ""
   write_fallback_line "==============[AdavaLinux Initramfs Fallback]==============="
-  write_fallback_line "AdavaLinux by Adava in 2026"
+  write_fallback_line "AdavaLinux by Adava Software in 2026"
   write_fallback_line "$reason"
   write_fallback_line "The system is still running from initramfs."
   write_fallback_line "============================================================"

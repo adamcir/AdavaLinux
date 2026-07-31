@@ -367,6 +367,16 @@ static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, v
             return -1;
         }
     }
+    {
+        char *const chown_home[] = { "chown", "1000:1000", path, NULL };
+        char *const chmod_home[] = { "chmod", "700", path, NULL };
+        char *const chmod_root[] = { "chmod", "700", ROOT_MNT "/root", NULL };
+        if (run_checked(chown_home, log_fn, ctx) != 0 ||
+            run_checked(chmod_home, log_fn, ctx) != 0 ||
+            run_checked(chmod_root, log_fn, ctx) != 0) {
+            return -1;
+        }
+    }
 
     snprintf(content, sizeof(content),
              "root:x:0:0:root:/root:/bin/sh\n"
@@ -528,14 +538,10 @@ int installer_run_install(const InstallerConfig *cfg,
     }
 
     step(progress_fn, ctx, 28, "Partitioning disk");
-    if (boot_uefi) {
-        snprintf(cmd, sizeof(cmd),
-                 "( echo o; echo n; echo p; echo 1; echo 2048; echo +512M; echo n; echo p; echo 2; echo 1050624; echo; echo t; echo 1; echo ef; echo a; echo 1; echo w ) | fdisk '%s'",
-                 cfg->disk);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-                 "( echo o; echo n; echo p; echo 1; echo 2048; echo '%s'; echo a; echo 1; echo w ) | fdisk '%s'",
-                 cfg->part_size, cfg->disk);
+    if (installer_build_fdisk_script(cfg->boot_mode, cfg->part_size, cmd, sizeof(cmd)) != 0 ||
+        snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " | fdisk '%s'", cfg->disk) < 0) {
+        emit_log(log_fn, ctx, "Failed to build fdisk command");
+        return 1;
     }
     if (shell_checked(cmd, log_fn, ctx) != 0) {
         return 1;

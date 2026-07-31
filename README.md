@@ -1,6 +1,6 @@
 # AdavaLinux
 
-AdavaLinux is a small educational Linux distribution built around a custom Linux kernel, BusyBox userspace, and Adava's `syspckg`. The project is mainly intended for learning how a Linux system boots, builds, and runs.
+AdavaLinux is a small educational Linux distribution built around a custom Linux kernel, BusyBox userspace, and `Adava's SystemPackager`. The project is mainly intended for learning how a Linux system boots, builds, and runs.
 
 UEFI graphics is supported, and QEMU is the recommended environment for testing.
 
@@ -120,9 +120,7 @@ make run-uefi-install
 Inside AdavaLinux, run the installer:
 
 ```sh
-# INSTALL_MEDIA is the device you booted the installer from.
-# DISK is the destination disk.
-INSTALL_MEDIA=/dev/sdb DISK=/dev/sda ./install.sh
+installer
 ```
 
 After installation, boot from the disk image:

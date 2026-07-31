@@ -99,6 +99,37 @@ int installer_build_root_arg(const char *root_dev, char *out, size_t out_size)
     return 0;
 }
 
+int installer_build_fdisk_script(InstallerBootMode boot_mode,
+                                const char *part_size,
+                                char *out,
+                                size_t out_size)
+{
+    int written;
+    const char *size = part_size != NULL && part_size[0] != '\0' ? part_size : "";
+
+    if (out == NULL || out_size == 0) {
+        return -1;
+    }
+
+    if (boot_mode == INSTALLER_BOOT_UEFI) {
+        written = snprintf(out, out_size,
+                           "echo o; echo n; echo p; echo 1; echo 2048; echo +512M; "
+                           "echo n; echo p; echo 2; echo 1050624; echo '%s'; "
+                           "echo t; echo 1; echo ef; echo a; echo 1; echo w",
+                           size);
+    } else {
+        written = snprintf(out, out_size,
+                           "echo o; echo n; echo p; echo 1; echo 2048; echo '%s'; "
+                           "echo a; echo 1; echo w",
+                           size);
+    }
+
+    if (written < 0 || (size_t)written >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
 int installer_should_redraw_progress_log(long now_ms, long last_draw_ms, long min_interval_ms)
 {
     if (last_draw_ms <= 0 || now_ms < last_draw_ms) {

@@ -429,7 +429,7 @@ int installer_ui_run_install(const InstallerConfig *cfg)
     }
     if (ui.rc == 0) {
         return message_box("Installation Complete",
-                           "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the ISO and reboot.",
+                           "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the installer media and reboot.",
                            "Reboot later");
     }
     message_box("Installation Failed",
@@ -458,7 +458,7 @@ static int password_pair_box(const char *title, const char *label, char *passwor
     }
 }
 
-static WizardStep previous_step(WizardStep step, const InstallerConfig *cfg)
+static WizardStep previous_step(WizardStep step)
 {
     switch (step) {
     case STEP_DISK:
@@ -470,7 +470,7 @@ static WizardStep previous_step(WizardStep step, const InstallerConfig *cfg)
     case STEP_PARTSIZE:
         return STEP_ACPI;
     case STEP_HOSTNAME:
-        return cfg->boot_mode == INSTALLER_BOOT_BIOS ? STEP_PARTSIZE : STEP_ACPI;
+        return STEP_PARTSIZE;
     case STEP_USER:
         return STEP_HOSTNAME;
     case STEP_USERPASS:
@@ -487,7 +487,7 @@ static WizardStep previous_step(WizardStep step, const InstallerConfig *cfg)
     }
 }
 
-static WizardStep next_step(WizardStep step, const InstallerConfig *cfg)
+static WizardStep next_step(WizardStep step)
 {
     switch (step) {
     case STEP_WELCOME:
@@ -497,7 +497,7 @@ static WizardStep next_step(WizardStep step, const InstallerConfig *cfg)
     case STEP_BOOT:
         return STEP_ACPI;
     case STEP_ACPI:
-        return cfg->boot_mode == INSTALLER_BOOT_BIOS ? STEP_PARTSIZE : STEP_HOSTNAME;
+        return STEP_PARTSIZE;
     case STEP_PARTSIZE:
         return STEP_HOSTNAME;
     case STEP_HOSTNAME:
@@ -565,7 +565,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                              "Continue")) {
                 return 0;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_DISK:
@@ -573,7 +573,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 message_box("No Disks Found",
                             "No supported target disks were found.\nSupported disks include sdX, vdX, xvdX, nvme and mmcblk.",
                             "Back");
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             for (i = 0; i < disk_count; i++) {
@@ -587,34 +587,34 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                                 (int)disk_count,
                                 disk_selected);
             if (selected < 0) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             disk_selected = selected;
             snprintf(cfg->disk, sizeof(cfg->disk), "%s", disks[selected].path);
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_BOOT:
             selected = menu_box("Boot Mode", "Select how this machine should boot:", boot_items, 2, boot_selected);
             if (selected < 0) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             boot_selected = selected;
             cfg->boot_mode = selected == 1 ? INSTALLER_BOOT_UEFI : INSTALLER_BOOT_BIOS;
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_ACPI:
             selected = menu_box("ACPI Mode", "Select kernel ACPI behavior:", acpi_items, 2, acpi_selected);
             if (selected < 0) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             acpi_selected = selected;
             cfg->acpi_mode = selected == 1 ? INSTALLER_ACPI_OFF : INSTALLER_ACPI_ON;
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_PARTSIZE:
@@ -623,33 +623,33 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                            cfg->part_size,
                            sizeof(cfg->part_size),
                            0)) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_HOSTNAME:
             if (!input_box("Hostname", "Hostname for this machine:", cfg->hostname, sizeof(cfg->hostname), 0)) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             if (cfg->hostname[0] == '\0') {
                 snprintf(cfg->hostname, sizeof(cfg->hostname), "adavalinux");
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_USER:
             if (!input_box("User Account", "Username (lowercase, not root):", cfg->username, sizeof(cfg->username), 0)) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             if (!installer_valid_username(cfg->username)) {
                 message_box("Invalid Username", "Use lowercase letters, numbers, '_' or '-'.\nThe username cannot be root.", "Back");
                 break;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_USERPASS:
@@ -657,31 +657,31 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                                    "Password for the user account:",
                                    cfg->password,
                                    sizeof(cfg->password))) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_ROOTPASS:
             if (!password_pair_box("Root Password", "Password for root:", cfg->root_password, sizeof(cfg->root_password))) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_CONFIRM:
             if (!confirm_phrase_box(cfg)) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
-            step = next_step(step, cfg);
+            step = next_step(step);
             break;
 
         case STEP_SUMMARY:
             if (!summary_box(cfg)) {
-                step = previous_step(step, cfg);
+                step = previous_step(step);
                 break;
             }
             return 1;
@@ -693,12 +693,12 @@ static void init_colors(void)
 {
     start_color();
     use_default_colors();
-    init_pair(C_BG, COLOR_WHITE, COLOR_BLUE);
+    init_pair(C_BG, COLOR_WHITE, COLOR_GREEN);
     init_pair(C_DIALOG, COLOR_BLACK, COLOR_WHITE);
-    init_pair(C_TITLE, COLOR_WHITE, COLOR_RED);
+    init_pair(C_TITLE, COLOR_WHITE, COLOR_YELLOW);
     init_pair(C_HILITE, COLOR_WHITE, COLOR_BLUE);
-    init_pair(C_BUTTON, COLOR_BLACK, COLOR_CYAN);
-    init_pair(C_ERROR, COLOR_WHITE, COLOR_RED);
+    init_pair(C_BUTTON, COLOR_WHITE, COLOR_BLUE);
+    init_pair(C_ERROR, COLOR_WHITE, COLOR_YELLOW);
     init_pair(C_LOG, COLOR_BLACK, COLOR_WHITE);
     init_pair(C_OK, COLOR_GREEN, COLOR_WHITE);
 }
@@ -709,6 +709,7 @@ int installer_ui_main(void)
     int rc = 1;
 
     initscr();
+    set_escdelay(25);
     cbreak();
     noecho();
     keypad(stdscr, TRUE);

@@ -405,6 +405,7 @@ iso:
 	say "Installing BusyBox into rootfs and disk initramfs"
 	bbmake CONFIG_PREFIX="$$ROOTFS_DIR" install >/dev/null
 	bbmake CONFIG_PREFIX="$$DISK_INITRAMFS_DIR" install >/dev/null
+	chmod 4755 "$$ROOTFS_DIR/bin/busybox"
 	say "Copying rootfs templates from filesforlinux"
 	[ -d "$$FILESFORLINUX_ROOTFS_DIR" ] || die "Rootfs template directory not found: $$FILESFORLINUX_ROOTFS_DIR"
 	cp -a "$$FILESFORLINUX_ROOTFS_DIR/." "$$ROOTFS_DIR/"
@@ -414,9 +415,12 @@ iso:
 	  [ -f "$$ROOTFS_DIR/$$req" ] || die "Required file missing in rootfs templates: $$req"
 	done
 	chmod +x "$$ROOTFS_DIR/init" "$$ROOTFS_DIR/etc/init.d/rcS" "$$ROOTFS_DIR/usr/share/udhcpc/default.script"
+	chmod 700 "$$ROOTFS_DIR/root"
+	chmod 644 "$$ROOTFS_DIR/etc/passwd" "$$ROOTFS_DIR/etc/group" 2>/dev/null || true
+	chmod 600 "$$ROOTFS_DIR/etc/shadow" 2>/dev/null || true
 	[ -f "$$DISK_INITRAMFS_DIR/init" ] || die "Required file missing in disk initramfs templates: init"
 	chmod +x "$$DISK_INITRAMFS_DIR/init"
-	say "Installing Syspckg and bundled packages into rootfs"
+	say "Installing SystemPackager and bundled packages into rootfs"
 	SYSPCKG_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 	[ -x "$$SYSPCKG_BIN" ] || die "Executable syspckg not found: $$SYSPCKG_BIN"
 	SYSPCKG_INFO="$$(file -b "$$SYSPCKG_BIN" 2>/dev/null || true)"
@@ -453,13 +457,6 @@ iso:
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
 	fi
-	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/install.sh" ]; then
-	  say "Copying install.sh into initramfs root"
-	  cp -f "$$FILESFORLINUX_ROOTFS_DIR/install.sh" "$$ROOTFS_DIR/install.sh"
-	  chmod +x "$$ROOTFS_DIR/install.sh"
-	else
-	  say "install.sh not found in filesforlinux/rootfs -> skipping initramfs copy"
-	fi
 	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg-source" ]; then
 	  say "Copying syspckg source config into rootfs"
 	  mkdir -p "$$ROOTFS_DIR/etc" "$$ROOTFS_DIR/usr/share/syspckg"
@@ -473,9 +470,9 @@ iso:
 	  say "syspckg-source not found in filesforlinux/rootfs/etc -> using syspckg built-in default URL"
 	fi
 	say "Packing $$OUT_INSTALLER_INITRAMFS_NAME"
-	( cd "$$ROOTFS_DIR" && find . -print0 | cpio --null -o --format=newc | gzip -9 > "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" )
+	( cd "$$ROOTFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip -9 > "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" )
 	say "Packing $$OUT_DISK_INITRAMFS_NAME"
-	( cd "$$DISK_INITRAMFS_DIR" && find . -print0 | cpio --null -o --format=newc | gzip -9 > "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" )
+	( cd "$$DISK_INITRAMFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip -9 > "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" )
 	say "Sanity check: installer initramfs contains init + bin/sh"
 	gzip -dc "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" | cpio -it | grep -E '^init$$|^bin/sh$$' >/dev/null || die "Installer initramfs does not contain init or bin/sh"
 	say "Sanity check: disk initramfs contains init + bin/sh"
@@ -485,11 +482,6 @@ iso:
 	cp -f "$$OUT_DIR/$$OUT_KERNEL_NAME" "$$ISO_DIR/boot/$$OUT_KERNEL_NAME"
 	cp -f "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_INSTALLER_INITRAMFS_NAME"
 	cp -f "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_DISK_INITRAMFS_NAME"
-	if [ -f "$$FILESFORLINUX_ISO_DIR/install.sh" ]; then
-	  cp -f "$$FILESFORLINUX_ISO_DIR/install.sh" "$$ISO_DIR/install.sh"
-	else
-	  say "install.sh not found in filesforlinux/iso -> skipping"
-	fi
 	GRUB_CFG_TEMPLATE="$$FILESFORLINUX_ISO_DIR/boot/grub/grub.cfg"
 	[ -f "$$GRUB_CFG_TEMPLATE" ] || die "Missing GRUB configuration: $$GRUB_CFG_TEMPLATE"
 	cp -f "$$GRUB_CFG_TEMPLATE" "$$ISO_DIR/boot/grub/grub.cfg"
