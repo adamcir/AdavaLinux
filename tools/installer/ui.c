@@ -341,6 +341,22 @@ static void copy_log_to_target(void)
     fclose(src);
 }
 
+static void request_reboot(void)
+{
+    char *reboot_sbin[] = { "/sbin/reboot", NULL };
+    char *busybox_reboot[] = { "/bin/busybox", "reboot", NULL };
+    char *reboot_path[] = { "reboot", NULL };
+
+    endwin();
+    if (installer_run_command(reboot_sbin, NULL, NULL) != 0 &&
+        installer_run_command(busybox_reboot, NULL, NULL) != 0) {
+        (void)installer_run_command(reboot_path, NULL, NULL);
+    }
+    reset_prog_mode();
+    refresh();
+    message_box("Reboot Failed", "The reboot command did not complete.\nYou can reboot manually from the shell.", "Close");
+}
+
 static void draw_progress(ProgressUi *ui)
 {
     WINDOW *win;
@@ -428,12 +444,17 @@ int installer_ui_run_install(const InstallerConfig *cfg)
         ui.log_file = NULL;
     }
     if (ui.rc == 0) {
-        return message_box("Installation Complete",
-                           "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the installer media and reboot.",
-                           "Reboot later");
+        if (message_box("Installation Complete",
+                        "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the installer media and press Enter to reboot.",
+                        "Reboot now")) {
+            request_reboot();
+        }
+        return 1;
     }
+    char failure_body[1024];
+    installer_format_failure_summary(INSTALLER_LOG_PATH, failure_body, sizeof(failure_body));
     message_box("Installation Failed",
-                "The installer stopped because a command failed.\n\nLog: /tmp/adavalinux-installer.log\nIf target root is mounted, copied to /mnt/root/var/log/adavalinux-installer.log.",
+                failure_body,
                 "Close");
     return 0;
 }

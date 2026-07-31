@@ -45,5 +45,7 @@ void installer_format_progress_bar(int percent, int width, char *out, size_t out
 int installer_should_redraw_progress_log(long now_ms, long last_draw_ms, long min_interval_ms);
 void installer_build_syspckg_install_argv(char *argv[6], const char *selector, int local_only);
 int installer_valid_uuid_value(const char *value);
+int installer_format_failure_summary(const char *log_path, char *out, size_t out_size);
+int installer_build_shutdown_links_command(const char *root, char *out, size_t out_size);
 
 #endif

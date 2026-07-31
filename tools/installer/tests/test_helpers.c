@@ -1,8 +1,12 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "installer.h"
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void test_username_validation(void)
 {
@@ -111,6 +115,46 @@ static void test_uuid_value_validation(void)
     assert(installer_valid_uuid_value("abc def") == 0);
 }
 
+static void test_failure_summary_includes_recent_log_lines(void)
+{
+    char path[] = "/tmp/installer-log-test.XXXXXX";
+    char out[512];
+    int fd = mkstemp(path);
+    FILE *f;
+
+    assert(fd >= 0);
+    f = fdopen(fd, "w");
+    assert(f != NULL);
+    fputs("AdavaLinux installer log\n", f);
+    fputs("$ mkfs.ext2 /dev/vda1\n", f);
+    fputs("mkfs.ext2: Device size reported as zero\n", f);
+    fputs("command exit: 1\n", f);
+    fputs("command failed with exit code 1\n", f);
+    fclose(f);
+
+    assert(installer_format_failure_summary(path, out, sizeof(out)) == 0);
+    assert(strstr(out, "The installer stopped because a command failed.") != NULL);
+    assert(strstr(out, "$ mkfs.ext2 /dev/vda1") != NULL);
+    assert(strstr(out, "mkfs.ext2: Device size reported as zero") != NULL);
+    assert(strstr(out, "command failed with exit code 1") != NULL);
+
+    unlink(path);
+}
+
+static void test_shutdown_links_command_covers_bin_and_sbin(void)
+{
+    char out[512];
+
+    assert(installer_build_shutdown_links_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strstr(out, "mkdir -p /mnt/root/bin /mnt/root/sbin") != NULL);
+    assert(strstr(out, "ln -sf busybox /mnt/root/bin/reboot") != NULL);
+    assert(strstr(out, "ln -sf busybox /mnt/root/bin/poweroff") != NULL);
+    assert(strstr(out, "ln -sf busybox /mnt/root/bin/halt") != NULL);
+    assert(strstr(out, "ln -sf ../bin/busybox /mnt/root/sbin/reboot") != NULL);
+    assert(strstr(out, "ln -sf ../bin/busybox /mnt/root/sbin/poweroff") != NULL);
+    assert(strstr(out, "ln -sf ../bin/busybox /mnt/root/sbin/halt") != NULL);
+}
+
 int main(void)
 {
     test_username_validation();
@@ -122,6 +166,8 @@ int main(void)
     test_progress_log_redraw_throttle();
     test_syspckg_install_argv_order();
     test_uuid_value_validation();
+    test_failure_summary_includes_recent_log_lines();
+    test_shutdown_links_command_covers_bin_and_sbin();
     puts("helper tests passed");
     return 0;
 }

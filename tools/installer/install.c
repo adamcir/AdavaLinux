@@ -602,6 +602,13 @@ int installer_run_install(const InstallerConfig *cfg,
         (void)installer_run_command(busybox_install, log_fn, ctx);
     }
     {
+        char cmd[1024];
+        if (installer_build_shutdown_links_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+            shell_checked(cmd, log_fn, ctx) != 0) {
+            return 1;
+        }
+    }
+    {
         char *const mkdir_boot[] = { "mkdir", "-p", ROOT_MNT "/boot", NULL };
         char *const cp_initrd[] = { "cp", INSTALL_MNT "/boot/initramfs-disk.gz", ROOT_MNT "/boot/initramfs-disk.gz", NULL };
         if (run_checked(mkdir_boot, log_fn, ctx) != 0 || run_checked(cp_initrd, log_fn, ctx) != 0) {
