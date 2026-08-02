@@ -19,6 +19,12 @@
 !tools/syspckg/tests/install_*.sh
 !tools/syspckg/tests/list_*.sh
 !tools/syspckg/tests/update_*.sh
+!tests/
+!tests/**
+!desktop/
+!desktop/**
+desktop/build/
+desktop/out/
 tools/installer/installer
 tools/installer/*.o
 tools/installer/tests/*.o

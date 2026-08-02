@@ -1970,8 +1970,26 @@ static int is_exec_path(const char *path) {
 
 static int is_package_control_file(const char *name) {
     return (strcmp(name, "install.sh") == 0 ||
+            strcmp(name, "remove.sh") == 0 ||
             strcmp(name, "syspckg-info") == 0 ||
             strcmp(name, "syspckg-deps") == 0);
+}
+
+static int run_package_hook(const char *install_dir, const char *root, const char *action) {
+    char hook_path[PATH_MAX];
+    struct stat st;
+    if (snprintf(hook_path, sizeof(hook_path), "%s/%s.sh", install_dir, action) >= (int)sizeof(hook_path)) {
+        return -1;
+    }
+    if (lstat(hook_path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    char *argv[] = { "/bin/sh", hook_path, (char *)root, (char *)action, NULL };
+    return run_cmd(argv);
 }
 
 static int file_has_exec_content(const char *path) {
@@ -3013,6 +3031,12 @@ int main(int argc, char *argv[]) {
         }
         if (write_manifest(p->install_dir, root, p->install_name) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to write manifest for: %s\n", p->install_name);
+            install_errors++;
+            continue;
+        }
+        if (run_package_hook(p->install_dir, root, "install") != 0) {
+            fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Install hook failed for: %s\n", p->install_name);
+            (void)remove_pkg_impl(root, p->install_name, 0);
             install_errors++;
             continue;
         }

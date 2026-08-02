@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+export ADAVA_THEME="${ADAVA_THEME:-default}"
+export ADAVA_THEME_FILE="${ADAVA_THEME_FILE:-/usr/share/adava/themes/${ADAVA_THEME}/theme.conf}"
+
+command -v openbox >/dev/null 2>&1 || {
+  echo 'adava-session: Openbox is not installed' >&2
+  exit 1
+}
+command -v adava-panel >/dev/null 2>&1 || {
+  echo 'adava-session: adava-panel is not installed' >&2
+  exit 1
+}
+
+adava-panel --position top &
+top_panel=$!
+adava-panel --position bottom &
+bottom_panel=$!
+
+cleanup() {
+  kill "$top_panel" "$bottom_panel" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+exec openbox --replace
