@@ -20,7 +20,7 @@
 
 #define ROOT_MNT "/mnt/root"
 #define INSTALL_MNT "/mnt/install"
-#define FS_TYPE "ext2"
+#define FS_TYPE "ext4"
 #define INSTALLER_LOG_PATH "/tmp/adavalinux-installer.log"
 
 static void emit_log(InstallerLogFn log_fn, void *ctx, const char *fmt, ...)
@@ -519,8 +519,55 @@ int installer_run_install(const InstallerConfig *cfg,
         return 1;
     }
 
-    step(progress_fn, ctx, 18, "Installing GRUB package");
-    if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", NULL, log_fn, ctx) != 0) {
+    if (cfg->action == INSTALLER_ACTION_UPDATE) {
+        step(progress_fn, ctx, 24, "Mounting target");
+        if (wait_for_partitions(part, NULL, log_fn, ctx) != 0) {
+            return 1;
+        }
+        {
+            char *const mount_root[] = { "mount", "-t", FS_TYPE, part, ROOT_MNT, NULL };
+            if (run_checked(mount_root, log_fn, ctx) != 0) {
+                return 1;
+            }
+        }
+        step(progress_fn, ctx, 50, "Updating installed system");
+        {
+            char *const update_all[] = {
+                "syspckg",
+                "update",
+                "--all",
+                "--root",
+                ROOT_MNT,
+                "--allow-root",
+                "-y",
+                NULL
+            };
+            if (run_checked(update_all, log_fn, ctx) != 0) {
+                installer_safe_umount(ROOT_MNT, log_fn, ctx);
+                return 1;
+            }
+        }
+        step(progress_fn, ctx, 98, "Syncing and unmounting");
+        {
+            char *const sync_cmd[] = { "sync", NULL };
+            (void)installer_run_command(sync_cmd, log_fn, ctx);
+        }
+        installer_safe_umount(ROOT_MNT, log_fn, ctx);
+        installer_safe_umount(INSTALL_MNT, log_fn, ctx);
+        step(progress_fn, ctx, 100, "Done");
+        emit_log(log_fn, ctx, "Done. Updated installed system on %s.", part);
+        return 0;
+    }
+
+    if (cfg->action == INSTALLER_ACTION_INSTALL) {
+        step(progress_fn, ctx, 18, "Installing GRUB package");
+        if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", NULL, log_fn, ctx) != 0) {
+            return 1;
+        }
+    }
+
+    step(progress_fn, ctx, 23, "Installing e2fsprogs package");
+    if (install_grub_pkg("e2fsprogs", NULL, log_fn, ctx) != 0) {
         return 1;
     }
 
@@ -559,16 +606,28 @@ int installer_run_install(const InstallerConfig *cfg,
         }
     }
     {
-        char *const mkfs_ext2[] = { "mkfs.ext2", "-F", "-E", "nodiscard", part, NULL };
-        char *const mkfs_ext2_basic[] = { "mkfs.ext2", "-F", part, NULL };
-        char *const fsck_ext2[] = { "fsck.ext2", "-f", "-y", part, NULL };
-        if (installer_run_command(mkfs_ext2, log_fn, ctx) != 0 &&
-            run_checked(mkfs_ext2_basic, log_fn, ctx) != 0) {
+        char *const mkfs_ext4[] = { "mkfs.ext4", "-F", "-E", "nodiscard", part, NULL };
+        char *const mkfs_ext4_basic[] = { "mkfs.ext4", "-F", part, NULL };
+        char *const fsck_ext4[] = { "fsck.ext4", "-f", "-y", part, NULL };
+        if (installer_run_command(mkfs_ext4, log_fn, ctx) != 0 &&
+            run_checked(mkfs_ext4_basic, log_fn, ctx) != 0) {
             return 1;
         }
-        if (installer_command_exists("fsck.ext2")) {
-            (void)installer_run_command(fsck_ext2, log_fn, ctx);
+        if (installer_command_exists("fsck.ext4")) {
+            (void)installer_run_command(fsck_ext4, log_fn, ctx);
         }
+    }
+
+    if (cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+        step(progress_fn, ctx, 98, "Syncing");
+        {
+            char *const sync_cmd[] = { "sync", NULL };
+            (void)installer_run_command(sync_cmd, log_fn, ctx);
+        }
+        installer_safe_umount(INSTALL_MNT, log_fn, ctx);
+        step(progress_fn, ctx, 100, "Done");
+        emit_log(log_fn, ctx, "Done. Disk was partitioned and formatted.");
+        return 0;
     }
 
     step(progress_fn, ctx, 48, "Mounting target");
@@ -583,7 +642,10 @@ int installer_run_install(const InstallerConfig *cfg,
         shell_checked("cd " ROOT_MNT " && gzip -dc " INSTALL_MNT "/boot/initramfs-installer.gz | cpio -idmv", log_fn, ctx) != 0) {
         return 1;
     }
-    (void)shell_checked("rm -f " ROOT_MNT "/install.sh " ROOT_MNT "/root/install.sh", log_fn, ctx);
+    if (installer_build_syspckg_state_cleanup_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
+        return 1;
+    }
     if (access(ROOT_MNT "/bin/busybox", X_OK) == 0) {
         char *const busybox_install[] = { ROOT_MNT "/bin/busybox", "--install", "-s", ROOT_MNT "/bin", NULL };
         (void)installer_run_command(busybox_install, log_fn, ctx);
@@ -615,6 +677,10 @@ int installer_run_install(const InstallerConfig *cfg,
     if (installer_build_copy_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
         shell_checked(cmd, log_fn, ctx) != 0) {
         emit_log(log_fn, ctx, "Failed to copy grub-mkconfig into target root");
+        return 1;
+    }
+    if (installer_build_syspckg_state_cleanup_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
         return 1;
     }
 

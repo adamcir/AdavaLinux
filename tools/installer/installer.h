@@ -13,6 +13,12 @@ typedef enum {
     INSTALLER_ACPI_OFF = 1
 } InstallerAcpiMode;
 
+typedef enum {
+    INSTALLER_ACTION_INSTALL = 0,
+    INSTALLER_ACTION_FORMAT_ONLY = 1,
+    INSTALLER_ACTION_UPDATE = 2
+} InstallerAction;
+
 typedef struct {
     char path[64];
     char model[128];
@@ -22,6 +28,7 @@ typedef struct {
 typedef struct {
     char install_media[64];
     char disk[64];
+    InstallerAction action;
     InstallerBootMode boot_mode;
     InstallerAcpiMode acpi_mode;
     char part_size[32];
@@ -66,5 +73,6 @@ int installer_build_uefi_removable_fallback_command(const char *root, char *out,
 int installer_valid_uuid_value(const char *value);
 int installer_format_failure_summary(const char *log_path, char *out, size_t out_size);
 int installer_build_shutdown_links_command(const char *root, char *out, size_t out_size);
+int installer_build_syspckg_state_cleanup_command(const char *root, char *out, size_t out_size);
 
 #endif

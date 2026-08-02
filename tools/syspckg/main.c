@@ -34,9 +34,11 @@ static int get_os_version(const char *root, char *out, size_t out_sz);
 static int is_safe_version(const char *v);
 static int get_pkg_base(const char *input, char *out, size_t out_sz);
 static int has_digit(const char *s);
+static int selector_has_explicit_version(const char *selector);
 static int resolve_latest_local(const char *dir, const char *base, char *out_name, size_t out_sz);
 static int resolve_latest_remote(const char *root, const char *base, char *out_name, size_t out_sz);
 static int resolve_latest_pkg_dir(const char *root, const char *base, char *out_name, size_t out_sz);
+static int list_local_installed_packages(const char *root);
 static int collect_installed_update_packages(const char *root, installed_pkg_t **out, size_t *out_count);
 static int latest_boot_version(const char *root, const char *prefix, const char *suffix,
                                char *latest, size_t latest_sz,
@@ -316,6 +318,73 @@ static int list_remote_packages(const char *root) {
         free(names[i]);
     }
     free(names);
+    return 0;
+}
+
+static int cmp_string_ptrs(const void *a, const void *b) {
+    const char *const *sa = a;
+    const char *const *sb = b;
+    return strcmp(*sa, *sb);
+}
+
+static int list_local_installed_packages(const char *root) {
+    char dir[PATH_MAX];
+    DIR *d;
+    struct dirent *de;
+    char **names = NULL;
+    size_t count = 0;
+    const char *suffix = ".list";
+    size_t suffix_len = strlen(suffix);
+
+    if (snprintf(dir, sizeof(dir), "%s/var/lib/syspckg/installed", root) >= (int)sizeof(dir)) {
+        return -1;
+    }
+    d = opendir(dir);
+    if (!d) {
+        return -1;
+    }
+    while ((de = readdir(d)) != NULL) {
+        size_t len = strlen(de->d_name);
+        char name[PATH_MAX];
+        char *copy;
+        char **next;
+
+        if (len <= suffix_len || strcmp(de->d_name + len - suffix_len, suffix) != 0) {
+            continue;
+        }
+        if (len - suffix_len + 1 > sizeof(name)) {
+            closedir(d);
+            free_strings(names, count);
+            return -1;
+        }
+        memcpy(name, de->d_name, len - suffix_len);
+        name[len - suffix_len] = '\0';
+        copy = strdup(name);
+        if (!copy) {
+            closedir(d);
+            free_strings(names, count);
+            return -1;
+        }
+        next = realloc(names, (count + 1) * sizeof(*names));
+        if (!next) {
+            free(copy);
+            closedir(d);
+            free_strings(names, count);
+            return -1;
+        }
+        names = next;
+        names[count++] = copy;
+    }
+    closedir(d);
+    if (count == 0) {
+        log_info("No locally installed packages found.");
+        return 0;
+    }
+    qsort(names, count, sizeof(*names), cmp_string_ptrs);
+    for (size_t i = 0; i < count; i++) {
+        printf("%s\n", names[i]);
+    }
+    free_strings(names, count);
     return 0;
 }
 
@@ -914,7 +983,7 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
 
     if (!strchr(selector, '/') &&
         !has_suffix(selector, ".syspckg") &&
-        !has_digit(selector)) {
+        !selector_has_explicit_version(selector)) {
         if (resolve_latest_local(".", selector, selector_name, sizeof(selector_name)) != 0 &&
             resolve_latest_pkg_dir(root, selector, selector_name, sizeof(selector_name)) != 0) {
             if (local_only || !online ||
@@ -1006,6 +1075,23 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
     return 0;
 }
 
+static int answer_is_yes_or_default(const char *line) {
+    size_t len;
+
+    if (line == NULL) {
+        return 1;
+    }
+    len = strcspn(line, "\r\n");
+    if (len == 0) {
+        return 1;
+    }
+    return (len == 1 && (line[0] == 'y' || line[0] == 'Y')) ||
+           (len == 3 &&
+            (line[0] == 'y' || line[0] == 'Y') &&
+            (line[1] == 'e' || line[1] == 'E') &&
+            (line[2] == 's' || line[2] == 'S'));
+}
+
 static int ask_install_confirmation(char **names, size_t count) {
     if (count == 0) {
         return 1;
@@ -1021,10 +1107,19 @@ static int ask_install_confirmation(char **names, size_t count) {
     if (!fgets(line, sizeof(line), stdin)) {
         return 1;
     }
-    if (line[0] == 'n' || line[0] == 'N') {
-        return 0;
+    return answer_is_yes_or_default(line);
+}
+
+static int ask_remove_confirmation(const char *name) {
+    printf("Package to be removed: %s\n", name);
+    printf("Do you want to remove this package? [Y/n] ");
+    fflush(stdout);
+
+    char line[32];
+    if (!fgets(line, sizeof(line), stdin)) {
+        return 1;
     }
-    return 1;
+    return answer_is_yes_or_default(line);
 }
 
 static ssize_t find_plan_by_selector(pkg_plan_t *plans, size_t count, const char *selector) {
@@ -1063,6 +1158,17 @@ static int has_digit(const char *s) {
         }
     }
     return 0;
+}
+
+static int selector_has_explicit_version(const char *selector) {
+    char name[PATH_MAX];
+    char *dash;
+
+    if (get_pkg_base(selector, name, sizeof(name)) != 0) {
+        return 0;
+    }
+    dash = strrchr(name, '-');
+    return dash != NULL && has_digit(dash + 1);
 }
 
 static int compare_versions(const char *a, const char *b) {
@@ -2431,16 +2537,16 @@ int main(int argc, char *argv[]) {
             online = 1;
             continue;
         }
-        if (strcmp(argv[i], "-local") == 0) {
-            if (is_list || is_update) {
-                log_err("-local is only valid for install");
+        if (strcmp(argv[i], "-local") == 0 || strcmp(argv[i], "--local") == 0) {
+            if (is_update) {
+                log_err("-local/--local is only valid for install or list");
                 return 1;
             }
             local_only = 1;
             continue;
         }
         if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
-            if (is_list || strcmp(cmd, "remove") == 0) {
+            if (is_list) {
                 log_err("-y/--yes is only valid for install or update");
                 return 1;
             }
@@ -2498,8 +2604,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (is_list) {
-        log_info("Listing packages on server");
-        if (list_remote_packages(root) != 0) {
+        log_info(local_only ? "Listing locally installed packages" : "Listing packages on server");
+        if ((local_only ? list_local_installed_packages(root) : list_remote_packages(root)) != 0) {
             return 1;
         }
         log_ok("Done");
@@ -2629,11 +2735,15 @@ int main(int argc, char *argv[]) {
     if (strcmp(cmd, "remove") == 0) {
         if (!strchr(argv[2], '/') &&
             !has_suffix(argv[2], ".syspckg") &&
-            !has_digit(argv[2])) {
+            !selector_has_explicit_version(argv[2])) {
             char resolved_remove[PATH_MAX];
             if (resolve_latest_installed(root, argv[2], resolved_remove, sizeof(resolved_remove)) == 0) {
                 snprintf(pkg_name, sizeof(pkg_name), "%s", resolved_remove);
             }
+        }
+        if (!assume_yes && !ask_remove_confirmation(pkg_name)) {
+            log_info("Removal cancelled");
+            return 0;
         }
         log_info("Removing package");
         if (remove_pkg(root, pkg_name) != 0) {
@@ -2693,7 +2803,7 @@ int main(int argc, char *argv[]) {
 
         if (!strchr(selector, '/') &&
             !has_suffix(selector, ".syspckg") &&
-            has_digit(selector) &&
+            selector_has_explicit_version(selector) &&
             is_pkg_installed(root, selector)) {
             continue;
         }

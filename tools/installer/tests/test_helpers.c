@@ -195,16 +195,16 @@ static void test_failure_summary_includes_recent_log_lines(void)
     f = fdopen(fd, "w");
     assert(f != NULL);
     fputs("AdavaLinux installer log\n", f);
-    fputs("$ mkfs.ext2 /dev/vda1\n", f);
-    fputs("mkfs.ext2: Device size reported as zero\n", f);
+    fputs("$ mkfs.ext4 /dev/vda1\n", f);
+    fputs("mkfs.ext4: Device size reported as zero\n", f);
     fputs("command exit: 1\n", f);
     fputs("command failed with exit code 1\n", f);
     fclose(f);
 
     assert(installer_format_failure_summary(path, out, sizeof(out)) == 0);
     assert(strstr(out, "The installer stopped because a command failed.") != NULL);
-    assert(strstr(out, "$ mkfs.ext2 /dev/vda1") != NULL);
-    assert(strstr(out, "mkfs.ext2: Device size reported as zero") != NULL);
+    assert(strstr(out, "$ mkfs.ext4 /dev/vda1") != NULL);
+    assert(strstr(out, "mkfs.ext4: Device size reported as zero") != NULL);
     assert(strstr(out, "command failed with exit code 1") != NULL);
 
     unlink(path);
@@ -272,6 +272,18 @@ static void test_uefi_removable_fallback_command_creates_bootx64(void)
     assert(strstr(out, "find /mnt/root/boot/efi/EFI") != NULL);
 }
 
+static void test_syspckg_state_cleanup_removes_installer_and_manifests(void)
+{
+    char out[768];
+
+    assert(installer_build_syspckg_state_cleanup_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strstr(out, "/mnt/root/usr/bin/installer") != NULL);
+    assert(strstr(out, "/mnt/root/usr/share/syspckg/packages") != NULL);
+    assert(strstr(out, "/mnt/root/var/cache/syspckg") != NULL);
+    assert(strstr(out, "/mnt/root/var/lib/syspckg/packages") != NULL);
+    assert(strstr(out, "/mnt/root/var/lib/syspckg/installed") != NULL);
+}
+
 int main(void)
 {
     test_username_validation();
@@ -295,6 +307,7 @@ int main(void)
     test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems();
     test_disable_standard_grub_generators_command_keeps_adavalinux_only();
     test_uefi_removable_fallback_command_creates_bootx64();
+    test_syspckg_state_cleanup_removes_installer_and_manifests();
     puts("helper tests passed");
     return 0;
 }

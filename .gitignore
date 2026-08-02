@@ -16,6 +16,8 @@
 !tools/syspckg
 !tools/syspckg/main.c
 !tools/syspckg/tests/
+!tools/syspckg/tests/install_*.sh
+!tools/syspckg/tests/list_*.sh
 !tools/syspckg/tests/update_*.sh
 tools/installer/installer
 tools/installer/*.o

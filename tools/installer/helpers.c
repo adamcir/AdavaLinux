@@ -484,3 +484,29 @@ int installer_build_shutdown_links_command(const char *root, char *out, size_t o
     }
     return 0;
 }
+
+int installer_build_syspckg_state_cleanup_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+
+    written = snprintf(out,
+                       out_size,
+                       "rm -f %s/install.sh %s/root/install.sh %s/usr/bin/installer %s/bin/installer && "
+                       "rm -rf %s/usr/share/syspckg/packages %s/var/cache/syspckg %s/var/lib/syspckg/packages %s/var/lib/syspckg/installed",
+                       root,
+                       root,
+                       root,
+                       root,
+                       root,
+                       root,
+                       root,
+                       root);
+    if (written < 0 || (size_t)written >= out_size) {
+        return -1;
+    }
+    return 0;
+}

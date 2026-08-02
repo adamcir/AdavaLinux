@@ -44,6 +44,7 @@ typedef struct {
 
 typedef enum {
     STEP_WELCOME = 0,
+    STEP_ACTION,
     STEP_MEDIA,
     STEP_DISK,
     STEP_BOOT,
@@ -271,11 +272,20 @@ static int confirm_phrase_box(const InstallerConfig *cfg)
     char expected[96];
     char body[512];
 
-    snprintf(expected, sizeof(expected), "ERASE %s", cfg->disk);
-    snprintf(body, sizeof(body),
-             "Target disk: %s\n\nALL DATA ON THIS DISK WILL BE PERMANENTLY DESTROYED.\n\nType exactly: %s",
-             cfg->disk, expected);
-    if (!message_box("Destructive Install", body, "I understand")) {
+    if (cfg->action == INSTALLER_ACTION_UPDATE) {
+        snprintf(expected, sizeof(expected), "UPDATE %s", cfg->disk);
+        snprintf(body, sizeof(body),
+                 "Target disk: %s\n\nThe installed system on this disk will be updated without formatting.\n\nType exactly: %s",
+                 cfg->disk, expected);
+    } else {
+        snprintf(expected, sizeof(expected), "ERASE %s", cfg->disk);
+        snprintf(body, sizeof(body),
+                 "Target disk: %s\n\nALL DATA ON THIS DISK WILL BE PERMANENTLY DESTROYED.\n\nType exactly: %s",
+                 cfg->disk, expected);
+    }
+    if (!message_box(cfg->action == INSTALLER_ACTION_UPDATE ? "Update Confirmation" : "Destructive Install",
+                     body,
+                     "I understand")) {
         return 0;
     }
 
@@ -285,7 +295,8 @@ static int confirm_phrase_box(const InstallerConfig *cfg)
         if (!input_box("Final Confirmation", expected, typed, sizeof(typed), 0)) {
             return 0;
         }
-        if (installer_confirmation_phrase_matches(cfg->disk, typed)) {
+        if ((cfg->action == INSTALLER_ACTION_UPDATE && strcmp(typed, expected) == 0) ||
+            (cfg->action != INSTALLER_ACTION_UPDATE && installer_confirmation_phrase_matches(cfg->disk, typed))) {
             return 1;
         }
         message_box("Confirmation Failed", "The confirmation text did not match.", "Back");
@@ -470,8 +481,20 @@ int installer_ui_run_install(const InstallerConfig *cfg)
         ui.log_file = NULL;
     }
     if (ui.rc == 0) {
-        if (message_box("Installation Complete",
-                        "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the installer media and press Enter to reboot.",
+        const char *title = "Operation Complete";
+        const char *body = "The selected operation completed successfully.\n\nLog: /tmp/adavalinux-installer.log\n\nPress Enter to reboot.";
+
+        if (cfg->action == INSTALLER_ACTION_INSTALL) {
+            title = "Installation Complete";
+            body = "AdavaLinux has been installed.\n\nLog: /tmp/adavalinux-installer.log\nTarget log: /var/log/adavalinux-installer.log\n\nDetach the installer media and press Enter to reboot.";
+        } else if (cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+            body = "The target disk has been partitioned and formatted.\n\nLog: /tmp/adavalinux-installer.log\n\nPress Enter to reboot.";
+        } else if (cfg->action == INSTALLER_ACTION_UPDATE) {
+            body = "The installed system has been updated.\n\nLog: /tmp/adavalinux-installer.log\n\nPress Enter to reboot.";
+        }
+
+        if (message_box(title,
+                        body,
                         "Reboot now")) {
             request_reboot();
         }
@@ -508,8 +531,10 @@ static int password_pair_box(const char *title, const char *label, char *passwor
 static WizardStep previous_step(WizardStep step)
 {
     switch (step) {
-    case STEP_MEDIA:
+    case STEP_ACTION:
         return STEP_WELCOME;
+    case STEP_MEDIA:
+        return STEP_ACTION;
     case STEP_DISK:
         return STEP_MEDIA;
     case STEP_BOOT:
@@ -540,6 +565,8 @@ static WizardStep next_step(WizardStep step)
 {
     switch (step) {
     case STEP_WELCOME:
+        return STEP_ACTION;
+    case STEP_ACTION:
         return STEP_MEDIA;
     case STEP_MEDIA:
         return STEP_DISK;
@@ -567,11 +594,54 @@ static WizardStep next_step(WizardStep step)
     }
 }
 
+static WizardStep next_step_for_config(WizardStep step, const InstallerConfig *cfg)
+{
+    if (step == STEP_BOOT && cfg->action == INSTALLER_ACTION_UPDATE) {
+        return STEP_CONFIRM;
+    }
+    if (step == STEP_BOOT && cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+        return STEP_PARTSIZE;
+    }
+    if (step == STEP_PARTSIZE && cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+        return STEP_CONFIRM;
+    }
+    return next_step(step);
+}
+
+static WizardStep previous_step_for_config(WizardStep step, const InstallerConfig *cfg)
+{
+    if (step == STEP_CONFIRM && cfg->action == INSTALLER_ACTION_UPDATE) {
+        return STEP_BOOT;
+    }
+    if (step == STEP_CONFIRM && cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+        return STEP_PARTSIZE;
+    }
+    if (step == STEP_PARTSIZE && cfg->action == INSTALLER_ACTION_FORMAT_ONLY) {
+        return STEP_BOOT;
+    }
+    return previous_step(step);
+}
+
 static int summary_box(const InstallerConfig *cfg)
 {
     char body[1024];
+    const char *action;
+
+    switch (cfg->action) {
+    case INSTALLER_ACTION_FORMAT_ONLY:
+        action = "Erase and format";
+        break;
+    case INSTALLER_ACTION_UPDATE:
+        action = "Update installed system";
+        break;
+    case INSTALLER_ACTION_INSTALL:
+    default:
+        action = "Erase, format and install";
+        break;
+    }
 
     snprintf(body, sizeof(body),
+             "Action:     %s\n"
              "Disk:       %s\n"
              "Media:      %s\n"
              "Boot mode:  %s\n"
@@ -579,15 +649,18 @@ static int summary_box(const InstallerConfig *cfg)
              "Root size:  %s\n"
              "Hostname:   %s\n"
              "Username:   %s\n\n"
-             "The next screen starts the installation.",
+             "The next screen starts the selected operation.",
+             action,
              cfg->disk,
              cfg->install_media,
              cfg->boot_mode == INSTALLER_BOOT_UEFI ? "UEFI" : "BIOS",
-             cfg->acpi_mode == INSTALLER_ACPI_OFF ? "off" : "default",
-             cfg->part_size[0] ? cfg->part_size : "use remaining/default",
-             cfg->hostname,
-             cfg->username);
-    return message_box("Installation Summary", body, "Install");
+             cfg->action == INSTALLER_ACTION_INSTALL ?
+                 (cfg->acpi_mode == INSTALLER_ACPI_OFF ? "off" : "default") : "-",
+             cfg->action == INSTALLER_ACTION_UPDATE ? "-" :
+                 (cfg->part_size[0] ? cfg->part_size : "use remaining/default"),
+             cfg->action == INSTALLER_ACTION_INSTALL ? cfg->hostname : "-",
+             cfg->action == INSTALLER_ACTION_INSTALL ? cfg->username : "-");
+    return message_box("Summary", body, "Start");
 }
 
 int installer_ui_collect_config(InstallerConfig *cfg)
@@ -599,6 +672,11 @@ int installer_ui_collect_config(InstallerConfig *cfg)
     size_t scanned_disk_count = 0;
     const char *boot_items[] = { "BIOS (legacy)", "UEFI" };
     const char *acpi_items[] = { "ACPI default", "ACPI=off (old hardware)" };
+    const char *action_items[] = {
+        "Erase, format and install system",
+        "Erase and format only",
+        "Update installed system on disk"
+    };
     char media_labels[32][160];
     char disk_labels[32][160];
     const char *media_items[32];
@@ -607,12 +685,14 @@ int installer_ui_collect_config(InstallerConfig *cfg)
     int selected;
     int media_selected = 0;
     int disk_selected = 0;
+    int action_selected = 0;
     int boot_selected = 0;
     int acpi_selected = 0;
     WizardStep step = STEP_WELCOME;
     size_t i;
 
     memset(cfg, 0, sizeof(*cfg));
+    cfg->action = INSTALLER_ACTION_INSTALL;
     cfg->boot_mode = INSTALLER_BOOT_BIOS;
     cfg->acpi_mode = INSTALLER_ACPI_ON;
     snprintf(cfg->hostname, sizeof(cfg->hostname), "adavalinux");
@@ -621,11 +701,22 @@ int installer_ui_collect_config(InstallerConfig *cfg)
         switch (step) {
         case STEP_WELCOME:
             if (!message_box("Welcome",
-                             "Welcome to AdavaLinux.\n\nThis installer will erase the selected disk and install a AdavaLinux.",
+                             "Welcome to AdavaLinux.\n\nChoose an operation, target disk, and boot mode before starting.",
                              "Continue")) {
                 return 0;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
+            break;
+
+        case STEP_ACTION:
+            selected = menu_box("Operation", "Select what the installer should do:", action_items, 3, action_selected);
+            if (selected < 0) {
+                step = previous_step_for_config(step, cfg);
+                break;
+            }
+            action_selected = selected;
+            cfg->action = (InstallerAction)selected;
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_MEDIA:
@@ -633,7 +724,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 message_box("No Install Media Found",
                             "No supported installation media were found.\nSupported media include srX, sdX, vdX, xvdX, nvme and mmcblk devices.",
                             "Back");
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             for (i = 0; i < media_count; i++) {
@@ -650,7 +741,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                                 (int)media_count,
                                 media_selected);
             if (selected < 0) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             media_selected = selected;
@@ -659,7 +750,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 cfg->disk[0] = '\0';
                 disk_selected = 0;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_DISK:
@@ -667,7 +758,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 message_box("No Disks Found",
                             "No supported target disks were found.\nSupported disks include sdX, vdX, xvdX, nvme and mmcblk.",
                             "Back");
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             disk_count = 0;
@@ -685,7 +776,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 message_box("No Target Disks Found",
                             "No supported target disks were found after excluding the selected installation media.",
                             "Back");
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             if ((size_t)disk_selected >= disk_count) {
@@ -697,34 +788,34 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                                 (int)disk_count,
                                 disk_selected);
             if (selected < 0) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             disk_selected = selected;
             snprintf(cfg->disk, sizeof(cfg->disk), "%s", disks[disk_map[selected]].path);
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_BOOT:
             selected = menu_box("Boot Mode", "Select how this machine should boot:", boot_items, 2, boot_selected);
             if (selected < 0) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             boot_selected = selected;
             cfg->boot_mode = selected == 1 ? INSTALLER_BOOT_UEFI : INSTALLER_BOOT_BIOS;
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_ACPI:
             selected = menu_box("ACPI Mode", "Select kernel ACPI behavior:", acpi_items, 2, acpi_selected);
             if (selected < 0) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             acpi_selected = selected;
             cfg->acpi_mode = selected == 1 ? INSTALLER_ACPI_OFF : INSTALLER_ACPI_ON;
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_PARTSIZE:
@@ -733,33 +824,33 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                            cfg->part_size,
                            sizeof(cfg->part_size),
                            0)) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_HOSTNAME:
             if (!input_box("Hostname", "Hostname for this machine:", cfg->hostname, sizeof(cfg->hostname), 0)) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             if (cfg->hostname[0] == '\0') {
                 snprintf(cfg->hostname, sizeof(cfg->hostname), "adavalinux");
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_USER:
             if (!input_box("User Account", "Username (lowercase, not root):", cfg->username, sizeof(cfg->username), 0)) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             if (!installer_valid_username(cfg->username)) {
                 message_box("Invalid Username", "Use lowercase letters, numbers, '_' or '-'.\nThe username cannot be root.", "Back");
                 break;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_USERPASS:
@@ -767,31 +858,31 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                                    "Password for the user account:",
                                    cfg->password,
                                    sizeof(cfg->password))) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_ROOTPASS:
             if (!password_pair_box("Root Password", "Password for root:", cfg->root_password, sizeof(cfg->root_password))) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_CONFIRM:
             if (!confirm_phrase_box(cfg)) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
-            step = next_step(step);
+            step = next_step_for_config(step, cfg);
             break;
 
         case STEP_SUMMARY:
             if (!summary_box(cfg)) {
-                step = previous_step(step);
+                step = previous_step_for_config(step, cfg);
                 break;
             }
             return 1;
