@@ -17,6 +17,8 @@ FILESFORLINUX_DISK_INITRAMFS_DIR := $(PROJECT_DIR)/filesforlinux/initramfs-disk
 FILESFORLINUX_ISO_DIR := $(PROJECT_DIR)/filesforlinux/iso
 INSTALLER_SRC_DIR := $(PROJECT_DIR)/tools/installer
 INSTALLER_BIN := $(INSTALLER_SRC_DIR)/installer
+SYSPCKG_SRC_DIR := $(PROJECT_DIR)/tools/syspckg
+SYSPCKG_BIN := $(SYSPCKG_SRC_DIR)/syspckg
 
 TARGET_ARCH ?= x86_64
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
@@ -83,6 +85,8 @@ FILESFORLINUX_DISK_INITRAMFS_DIR="$(FILESFORLINUX_DISK_INITRAMFS_DIR)"
 FILESFORLINUX_ISO_DIR="$(FILESFORLINUX_ISO_DIR)"
 INSTALLER_SRC_DIR="$(INSTALLER_SRC_DIR)"
 INSTALLER_BIN="$(INSTALLER_BIN)"
+SYSPCKG_SRC_DIR="$(SYSPCKG_SRC_DIR)"
+SYSPCKG_BIN="$(SYSPCKG_BIN)"
 JOBS="$(JOBS)"
 TARGET_ARCH="$(TARGET_ARCH)"
 CROSS_COMPILE="$(CROSS_COMPILE)"
@@ -302,6 +306,17 @@ tools:
 	else
 	  say "tools/installer not found -> skipping ncurses installer frontend build"
 	fi
+	[ -d "$$SYSPCKG_SRC_DIR" ] || die "tools/syspckg not found"
+	say "Building SystemPackager"
+	if [ -n "$$CROSS_COMPILE" ]; then
+	  make -C "$$SYSPCKG_SRC_DIR" clean all CC="$${CROSS_COMPILE}gcc"
+	else
+	  make -C "$$SYSPCKG_SRC_DIR" clean all
+	fi
+	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
+	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
+	cp -f "$$SYSPCKG_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 
 kernel:
 	$(COMMON_SH)
@@ -325,12 +340,12 @@ kernel:
 	      \#\ CONFIG_*\ is\ not\ set)
 	        opt="$${line#\# }"
 	        opt="$${opt% is not set}"
-	        "$$CFG_TOOL" --disable "$$opt"
+	        "$$CFG_TOOL" --file "$$KERNEL_DIR/.config" --disable "$$opt"
 	        ;;
 	      \#*) continue ;;
-	      CONFIG_*=y) "$$CFG_TOOL" --enable "$${line%%=*}" ;;
-	      CONFIG_*=m) "$$CFG_TOOL" --module "$${line%%=*}" ;;
-	      CONFIG_*=n) "$$CFG_TOOL" --disable "$${line%%=*}" ;;
+	      CONFIG_*=y) "$$CFG_TOOL" --file "$$KERNEL_DIR/.config" --enable "$${line%%=*}" ;;
+	      CONFIG_*=m) "$$CFG_TOOL" --file "$$KERNEL_DIR/.config" --module "$${line%%=*}" ;;
+	      CONFIG_*=n) "$$CFG_TOOL" --file "$$KERNEL_DIR/.config" --disable "$${line%%=*}" ;;
 	      *) die "Invalid kernel config line: $$line" ;;
 	    esac
 	  done < "$$KERNEL_CFG_FRAGMENT"

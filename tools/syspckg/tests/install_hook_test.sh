@@ -20,7 +20,7 @@ cat > "$pkgdir/install.sh" <<'EOF'
 #!/bin/sh
 set -eu
 test -f "$1/usr/share/hooked/value"
-printf '%s\n' "$2" > "$1/etc/hooked-action"
+printf '%s\n' "$2" >> "$1/etc/hooked-action"
 EOF
 chmod +x "$pkgdir/install.sh"
 printf 'hooked\n' > "$pkgdir/usr/share/hooked/value"
@@ -43,10 +43,23 @@ printf '%s\n' 'SOURCE_URL=http://example.invalid/products/AdavaLinux' > "$workdi
 gcc -D_GNU_SOURCE -std=c11 -Wall -Wextra -DSYSPCKG_SOURCE_FILE='"'"$workdir/syspckg-source"'"' \
   main.c -o "$workdir/syspckg"
 
-PATH="$workdir/bin:$PATH" TEST_REPO="$workdir/repo" \
-  "$workdir/syspckg" install hooked --root "$fake_root" --allow-root -y >/dev/null
+install_output=$(PATH="$workdir/bin:$PATH" TEST_REPO="$workdir/repo" \
+  "$workdir/syspckg" install hooked --root "$fake_root" --allow-root -y)
 
 test -f "$fake_root/usr/share/hooked/value"
 test "$(cat "$fake_root/etc/hooked-action")" = install
+grep -Fx 'Running install.sh' <<<"$install_output"
+
+PATH="$workdir/bin:$PATH" TEST_REPO="$workdir/repo" \
+  "$workdir/syspckg" install hooked --root "$fake_root" --allow-root -y >/dev/null
+
+test "$(wc -l < "$fake_root/etc/hooked-action")" -eq 2
+test "$(tail -n1 "$fake_root/etc/hooked-action")" = install
+
+if PATH="$workdir/bin:$PATH" TEST_REPO="$workdir/repo" \
+  "$workdir/syspckg" install hooked -online --root "$fake_root" --allow-root -y >/dev/null 2>&1; then
+  printf '%s\n' 'expected -online to be rejected' >&2
+  exit 1
+fi
 
 printf 'install hook tests passed\n'

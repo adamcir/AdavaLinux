@@ -291,6 +291,27 @@ int installer_build_grub_mkconfig_command(const char *root, char *out, size_t ou
     return written >= 0 && (size_t)written < out_size ? 0 : -1;
 }
 
+int installer_build_default_grub_config(const char *root_arg,
+                                        InstallerAcpiMode acpi_mode,
+                                        char *out,
+                                        size_t out_size)
+{
+    const char *extra;
+    int written;
+
+    if (root_arg == NULL || root_arg[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    extra = acpi_mode == INSTALLER_ACPI_OFF ? " acpi=off noapic nolapic irqpoll pci=nomsi" : "";
+    written = snprintf(out, out_size,
+                       "GRUB_TIMEOUT=10\n"
+                       "GRUB_DEFAULT=0\n"
+                       "GRUB_CMDLINE_LINUX=\"%s rootfstype=ext4 rootwait rootdelay=5 rw console=ttyS0 console=tty1 libata.force=noncq%s\"\n"
+                       "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n",
+                       root_arg, extra);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
 int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size_t out_size)
 {
     int written;

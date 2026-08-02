@@ -25,7 +25,7 @@
 #define SYSPCKG_VERSION_FILE "/usr/share/syspckg/syspckg-version"
 #endif
 
-#define SYSPCKG_VERSION "1.0"
+#define SYSPCKG_VERSION "1.0.1"
 #define DEFAULT_SOURCE_URL "http://192.168.10.7/products/AdavaLinux"
 
 typedef struct installed_pkg installed_pkg_t;
@@ -944,7 +944,7 @@ static int read_pkg_metadata_from_archive(const char *archive_path,
 }
 
 static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
-                                    const char *selector, int online, int local_only,
+                                    const char *selector, int local_only,
                                     char *out_pkg_name, size_t out_pkg_name_sz,
                                     char *out_archive_path, size_t out_archive_path_sz) {
     if (is_url(selector)) {
@@ -952,7 +952,7 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
         char file_name[PATH_MAX];
         char out_path[PATH_MAX];
 
-        if (local_only || !online || base == NULL || base[1] == '\0') {
+        if (local_only || base == NULL || base[1] == '\0') {
             return -1;
         }
         base++;
@@ -986,7 +986,7 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
         !selector_has_explicit_version(selector)) {
         if (resolve_latest_local(".", selector, selector_name, sizeof(selector_name)) != 0 &&
             resolve_latest_pkg_dir(root, selector, selector_name, sizeof(selector_name)) != 0) {
-            if (local_only || !online ||
+            if (local_only ||
                 resolve_latest_remote(root, selector, selector_name, sizeof(selector_name)) != 0) {
                 return -1;
             }
@@ -1038,7 +1038,7 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
         return 0;
     }
 
-    if (local_only || !online) {
+    if (local_only) {
         return -1;
     }
 
@@ -1988,6 +1988,7 @@ static int run_package_hook(const char *install_dir, const char *root, const cha
         errno = EINVAL;
         return -1;
     }
+    log_info("Running install.sh");
     char *argv[] = { "/bin/sh", hook_path, (char *)root, (char *)action, NULL };
     return run_cmd(argv);
 }
@@ -2424,6 +2425,90 @@ static int run_grub_mkconfig(const char *root) {
     return run_cmd(argv);
 }
 
+static int root_arg_from_file(const char *path, char *out, size_t out_sz) {
+    FILE *fp;
+    char line[2048];
+
+    if (path == NULL || out == NULL || out_sz == 0) {
+        return -1;
+    }
+    fp = fopen(path, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char *arg = strstr(line, "root=");
+        char *end;
+        if (arg == NULL) {
+            continue;
+        }
+        end = arg;
+        while (*end != '\0' && !isspace((unsigned char)*end) && *end != '\"' && *end != '\'') {
+            end++;
+        }
+        if (end == arg || (size_t)(end - arg) >= out_sz) {
+            fclose(fp);
+            return -1;
+        }
+        memcpy(out, arg, (size_t)(end - arg));
+        out[end - arg] = '\0';
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return -1;
+}
+
+static int write_default_grub(const char *root) {
+    char default_path[PATH_MAX];
+    char grub_cfg_path[PATH_MAX];
+    char temp_path[PATH_MAX];
+    char root_arg[256];
+    char contents[1024];
+    int fd;
+    int written;
+    size_t length;
+    size_t offset = 0;
+
+    if (snprintf(default_path, sizeof(default_path), "%s/etc/default/grub", root) >= (int)sizeof(default_path) ||
+        snprintf(grub_cfg_path, sizeof(grub_cfg_path), "%s/boot/grub/grub.cfg", root) >= (int)sizeof(grub_cfg_path)) {
+        return -1;
+    }
+    if (root_arg_from_file(default_path, root_arg, sizeof(root_arg)) != 0 &&
+        root_arg_from_file(grub_cfg_path, root_arg, sizeof(root_arg)) != 0) {
+        return -1;
+    }
+    written = snprintf(contents, sizeof(contents),
+                       "GRUB_TIMEOUT=10\n"
+                       "GRUB_DEFAULT=0\n"
+                       "GRUB_CMDLINE_LINUX=\"%s rootfstype=ext4 rootwait rootdelay=5 rw console=ttyS0 console=tty1 libata.force=noncq\"\n"
+                       "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n",
+                       root_arg);
+    if (written < 0 || (size_t)written >= sizeof(contents) || ensure_parent_dir(default_path, 0755) != 0 ||
+        snprintf(temp_path, sizeof(temp_path), "%s.syspckg-tmp.XXXXXX", default_path) >= (int)sizeof(temp_path)) {
+        return -1;
+    }
+    fd = mkstemp(temp_path);
+    if (fd < 0) {
+        return -1;
+    }
+    length = (size_t)written;
+    while (offset < length) {
+        ssize_t result = write(fd, contents + offset, length - offset);
+        if (result < 0) {
+            close(fd);
+            unlink(temp_path);
+            return -1;
+        }
+        offset += (size_t)result;
+    }
+    if (fchmod(fd, 0644) != 0 || close(fd) != 0 || rename(temp_path, default_path) != 0) {
+        unlink(temp_path);
+        return -1;
+    }
+    return 0;
+}
+
 static int chmod_grub_generator(const char *root, const char *dir, const char *name, mode_t mode) {
     char path[PATH_MAX];
     if (snprintf(path, sizeof(path), "%s/%s/%s", root, dir, name) >= (int)sizeof(path)) {
@@ -2479,6 +2564,9 @@ static int configure_kernel_update_boot(const char *root) {
         }
     }
     (void)previous;
+    if (write_default_grub(root) != 0) {
+        return -1;
+    }
     if (disable_standard_grub_generators(root) != 0) {
         return -1;
     }
@@ -2491,7 +2579,7 @@ int main(int argc, char *argv[]) {
 
     if (argc < 2) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
-        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-online] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
@@ -2507,7 +2595,7 @@ int main(int argc, char *argv[]) {
 
     if (!is_list && argc < 3) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
-        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-online] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
@@ -2515,7 +2603,6 @@ int main(int argc, char *argv[]) {
 
     const char *root = "/";
     int allow_root = 0;
-    int online = 0;
     int local_only = 0;
     int assume_yes = 0;
     int dry_run = 0;
@@ -2545,14 +2632,6 @@ int main(int argc, char *argv[]) {
         }
         if (strcmp(argv[i], "--allow-root") == 0) {
             allow_root = 1;
-            continue;
-        }
-        if (strcmp(argv[i], "-online") == 0) {
-            if (is_list || is_update) {
-                log_err("-online is only valid for install");
-                return 1;
-            }
-            online = 1;
             continue;
         }
         if (strcmp(argv[i], "-local") == 0 || strcmp(argv[i], "--local") == 0) {
@@ -2603,16 +2682,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (strcmp(cmd, "remove") == 0 && online) {
-        log_err("-online is only valid for install");
-        return 1;
-    }
     if (strcmp(cmd, "remove") == 0 && local_only) {
         log_err("-local is only valid for install");
-        return 1;
-    }
-    if (online && local_only) {
-        log_err("Use either -online or -local, not both");
         return 1;
     }
 
@@ -2739,7 +2810,6 @@ int main(int argc, char *argv[]) {
         }
 
         cmd = "install";
-        online = 1;
     }
 
     const char *pkg_arg = is_update ? update_selector : argv[2];
@@ -2834,8 +2904,7 @@ int main(int argc, char *argv[]) {
             goto install_cleanup;
         }
 
-        int allow_remote = (local_only ? 0 : 1);
-        if (resolve_pkg_archive_path(root, tmpdir, selector, allow_remote, local_only,
+        if (resolve_pkg_archive_path(root, tmpdir, selector, local_only,
                                      plan.pkg_name, sizeof(plan.pkg_name),
                                      plan.archive_path, sizeof(plan.archive_path)) != 0) {
             if (is_root_request) {
@@ -2917,6 +2986,9 @@ int main(int argc, char *argv[]) {
             goto install_cleanup;
         }
         plan.installed = is_pkg_installed(root, plan.install_name);
+        if (is_root_request) {
+            plan.installed = 0;
+        }
 
         pkg_plan_t *next = realloc(plans, (plan_count + 1) * sizeof(*plans));
         if (!next) {

@@ -708,16 +708,9 @@ int installer_run_install(const InstallerConfig *cfg,
     }
     emit_log(log_fn, ctx, "Using root kernel argument: %s", root_arg);
     {
-        const char *extra = cfg->acpi_mode == INSTALLER_ACPI_OFF ?
-            " acpi=off noapic nolapic irqpoll pci=nomsi" : "";
         char default_grub[1024];
-        snprintf(default_grub, sizeof(default_grub),
-                 "GRUB_TIMEOUT=10\n"
-                 "GRUB_DEFAULT=0\n"
-                 "GRUB_CMDLINE_LINUX=\"%s rootfstype=%s rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq%s\"\n"
-                 "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n",
-                 root_arg, FS_TYPE, extra);
-        if (shell_checked("mkdir -p " ROOT_MNT "/etc/default", log_fn, ctx) != 0 ||
+        if (installer_build_default_grub_config(root_arg, cfg->acpi_mode, default_grub, sizeof(default_grub)) != 0 ||
+            shell_checked("mkdir -p " ROOT_MNT "/etc/default", log_fn, ctx) != 0 ||
             installer_write_file(ROOT_MNT "/etc/default/grub", default_grub) != 0) {
             emit_log(log_fn, ctx, "Failed to write /etc/default/grub: %s", strerror(errno));
             return 1;

@@ -1,7 +1,0 @@
-DEP=adava-theme-default-0.1.0
-DEP=xorg-server-21.1.12
-DEP=openbox-3.6.1
-DEP=libX11-1.8.10
-DEP=libxcb-1.17.0
-DEP=libdrm-2.4.124
-DEP=pam

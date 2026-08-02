@@ -66,6 +66,10 @@ void installer_build_syspckg_root_install_argv(char *argv[9],
                                                const char *root,
                                                int local_only);
 int installer_build_grub_mkconfig_command(const char *root, char *out, size_t out_size);
+int installer_build_default_grub_config(const char *root_arg,
+                                        InstallerAcpiMode acpi_mode,
+                                        char *out,
+                                        size_t out_size);
 int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size_t out_size);
 int installer_build_prepare_grub_chroot_command(const char *root, char *out, size_t out_size);
 int installer_build_disable_standard_grub_generators_command(const char *root, char *out, size_t out_size);
