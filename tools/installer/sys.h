@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 int installer_scan_disks(InstallerDisk *disks, size_t max_disks, size_t *count);
+int installer_scan_install_media(InstallerDisk *media, size_t max_media, size_t *count);
 int installer_run_command(char *const argv[], InstallerLogFn log_fn, void *log_ctx);
 int installer_run_shell(const char *command, InstallerLogFn log_fn, void *log_ctx);
 int installer_write_file(const char *path, const char *content);

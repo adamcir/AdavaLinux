@@ -21,7 +21,14 @@
 #define SYSPCKG_SOURCE_FILE "/etc/syspckg-source"
 #endif
 
+#ifndef SYSPCKG_VERSION_FILE
+#define SYSPCKG_VERSION_FILE "/usr/share/syspckg/syspckg-version"
+#endif
+
+#define SYSPCKG_VERSION "1.0"
 #define DEFAULT_SOURCE_URL "http://192.168.10.7/products/AdavaLinux"
+
+typedef struct installed_pkg installed_pkg_t;
 
 static int get_os_version(const char *root, char *out, size_t out_sz);
 static int is_safe_version(const char *v);
@@ -30,6 +37,11 @@ static int has_digit(const char *s);
 static int resolve_latest_local(const char *dir, const char *base, char *out_name, size_t out_sz);
 static int resolve_latest_remote(const char *root, const char *base, char *out_name, size_t out_sz);
 static int resolve_latest_pkg_dir(const char *root, const char *base, char *out_name, size_t out_sz);
+static int collect_installed_update_packages(const char *root, installed_pkg_t **out, size_t *out_count);
+static int latest_boot_version(const char *root, const char *prefix, const char *suffix,
+                               char *latest, size_t latest_sz,
+                               char *previous, size_t previous_sz);
+static void free_strings(char **arr, size_t count);
 
 static char g_tmpdir[PATH_MAX];
 static char g_tmp_deps_path[PATH_MAX];
@@ -108,6 +120,18 @@ static int file_exists(const char *path) {
     return access(path, F_OK) == 0;
 }
 
+static int is_url(const char *s) {
+    return s != NULL &&
+           (strncmp(s, "http://", 7) == 0 || strncmp(s, "https://", 8) == 0);
+}
+
+static int is_packager_pkg_name(const char *name) {
+    if (name == NULL) {
+        return 0;
+    }
+    return strcmp(name, "syspckg") == 0 || strncmp(name, "syspckg-", 8) == 0;
+}
+
 static char *trim_whitespace(char *s) {
     while (*s && isspace((unsigned char)*s)) {
         s++;
@@ -167,6 +191,12 @@ static int is_core_lib_path(const char *path) {
 static int download_pkg_wget(const char *url, const char *out_path) {
     char *wget_argv[] = { "wget", "-O", (char *)out_path, (char *)url, NULL };
     return run_cmd(wget_argv);
+}
+
+static int join_url2(const char *base, const char *part, char *out, size_t out_sz) {
+    size_t base_len = strlen(base);
+    const char *slash = (base_len > 0 && base[base_len - 1] == '/') ? "" : "/";
+    return snprintf(out, out_sz, "%s%s%s", base, slash, part) < (int)out_sz ? 0 : -1;
 }
 
 static int is_pkg_token_char(int c) {
@@ -289,6 +319,69 @@ static int list_remote_packages(const char *root) {
     return 0;
 }
 
+static int collect_remote_tokens(const char *url, const char *suffix, char ***out, size_t *out_count) {
+    char cmd[PATH_MAX + 32];
+    FILE *fp;
+    char **names = NULL;
+    size_t count = 0;
+    char line[1024];
+    size_t suffix_len = strlen(suffix);
+
+    *out = NULL;
+    *out_count = 0;
+
+    if (snprintf(cmd, sizeof(cmd), "wget -qO- %s", url) >= (int)sizeof(cmd)) {
+        return -1;
+    }
+    fp = popen(cmd, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        char *p = line;
+        while ((p = strstr(p, suffix)) != NULL) {
+            char *end = p + suffix_len;
+            char *start = p;
+            while (start > line && is_pkg_token_char((unsigned char)start[-1])) {
+                start--;
+            }
+            size_t len = (size_t)(end - start);
+            if (len > 0 && len < PATH_MAX) {
+                char name[PATH_MAX];
+                memcpy(name, start, len);
+                name[len] = '\0';
+                if (!name_exists(names, count, name)) {
+                    char *copy = strdup(name);
+                    char **next;
+                    if (!copy) {
+                        pclose(fp);
+                        free_strings(names, count);
+                        return -1;
+                    }
+                    next = realloc(names, (count + 1) * sizeof(*names));
+                    if (!next) {
+                        free(copy);
+                        pclose(fp);
+                        free_strings(names, count);
+                        return -1;
+                    }
+                    names = next;
+                    names[count++] = copy;
+                }
+            }
+            p = end;
+        }
+    }
+    if (pclose(fp) == -1) {
+        free_strings(names, count);
+        return -1;
+    }
+    *out = names;
+    *out_count = count;
+    return 0;
+}
+
 static int strip_syspckg_suffix(const char *name, char *out, size_t out_sz) {
     size_t nl = strlen(name);
     const char *suffix = ".syspckg";
@@ -327,7 +420,9 @@ static int find_install_dir(const char *tmpdir, char *out, size_t out_sz) {
             continue;
         }
         char info_path[PATH_MAX];
-        snprintf(info_path, sizeof(info_path), "%s/syspckg-info", candidate);
+        if (snprintf(info_path, sizeof(info_path), "%s/syspckg-info", candidate) >= (int)sizeof(info_path)) {
+            continue;
+        }
         if (access(info_path, R_OK) == 0) {
             if (found) {
                 log_err("Multiple syspckg-info found in package");
@@ -409,6 +504,29 @@ static int read_key_from_file(const char *path, const char *key, char *out, size
     }
     fclose(f);
     return found ? 0 : -1;
+}
+
+static int get_packager_version(const char *root, char *out, size_t out_sz) {
+    char path[PATH_MAX];
+    char line[128];
+
+    if (snprintf(path, sizeof(path), "%s%s", root, SYSPCKG_VERSION_FILE) < (int)sizeof(path)) {
+        FILE *f = fopen(path, "r");
+        if (f != NULL) {
+            if (fgets(line, sizeof(line), f) != NULL) {
+                char *trimmed;
+                fclose(f);
+                trimmed = trim_whitespace(line);
+                if (is_safe_version(trimmed) &&
+                    snprintf(out, out_sz, "%s", trimmed) < (int)out_sz) {
+                    return 0;
+                }
+            } else {
+                fclose(f);
+            }
+        }
+    }
+    return snprintf(out, out_sz, "%s", SYSPCKG_VERSION) < (int)out_sz ? 0 : -1;
 }
 
 static int read_version_from_file(const char *path, char *out, size_t out_sz) {
@@ -584,11 +702,18 @@ typedef struct {
     char pkg_ver[64];
     char extract_dir[PATH_MAX];
     char install_dir[PATH_MAX];
+    char installed_name[PATH_MAX];
     char **deps;
     size_t dep_count;
     int installed;
     int extracted;
 } pkg_plan_t;
+
+struct installed_pkg {
+    char base[PATH_MAX];
+    char installed_name[PATH_MAX];
+    char installed_version[PATH_MAX];
+};
 
 static int push_string(char ***arr, size_t *count, const char *value) {
     char **next = realloc(*arr, (*count + 1) * sizeof(**arr));
@@ -753,6 +878,35 @@ static int resolve_pkg_archive_path(const char *root, const char *tmpdir,
                                     const char *selector, int online, int local_only,
                                     char *out_pkg_name, size_t out_pkg_name_sz,
                                     char *out_archive_path, size_t out_archive_path_sz) {
+    if (is_url(selector)) {
+        const char *base = strrchr(selector, '/');
+        char file_name[PATH_MAX];
+        char out_path[PATH_MAX];
+
+        if (local_only || !online || base == NULL || base[1] == '\0') {
+            return -1;
+        }
+        base++;
+        if (!has_suffix(base, ".syspckg")) {
+            return -1;
+        }
+        if (snprintf(file_name, sizeof(file_name), "%s", base) >= (int)sizeof(file_name) ||
+            get_pkg_base(file_name, out_pkg_name, out_pkg_name_sz) != 0 ||
+            snprintf(out_path, sizeof(out_path), "%s/%s", tmpdir, file_name) >= (int)sizeof(out_path)) {
+            return -1;
+        }
+        if (!file_exists(out_path)) {
+            char msg[PATH_MAX + 64];
+            snprintf(msg, sizeof(msg), "Downloading %s", selector);
+            log_info(msg);
+            if (download_pkg_wget(selector, out_path) != 0) {
+                return -1;
+            }
+            log_ok("Download complete");
+        }
+        return snprintf(out_archive_path, out_archive_path_sz, "%s", out_path) < (int)out_archive_path_sz ? 0 : -1;
+    }
+
     char selector_name[PATH_MAX];
     if (snprintf(selector_name, sizeof(selector_name), "%s", selector) >= (int)sizeof(selector_name)) {
         return -1;
@@ -1170,6 +1324,435 @@ static int resolve_latest_installed(const char *root, const char *base, char *ou
     return 0;
 }
 
+static int strip_trailing_slash(const char *in, char *out, size_t out_sz) {
+    size_t len = strlen(in);
+    if (len > 0 && in[len - 1] == '/') {
+        len--;
+    }
+    if (len == 0 || len + 1 > out_sz) {
+        return -1;
+    }
+    memcpy(out, in, len);
+    out[len] = '\0';
+    return 0;
+}
+
+static int version_from_prefixed_pkg(const char *name, const char *prefix, const char *suffix,
+                                     char *out, size_t out_sz) {
+    size_t prefix_len = strlen(prefix);
+    size_t suffix_len = strlen(suffix);
+    size_t name_len = strlen(name);
+    size_t version_len;
+
+    if (name_len <= prefix_len + suffix_len ||
+        strncmp(name, prefix, prefix_len) != 0 ||
+        strcmp(name + name_len - suffix_len, suffix) != 0) {
+        return -1;
+    }
+    version_len = name_len - prefix_len - suffix_len;
+    if (version_len == 0 || version_len + 1 > out_sz) {
+        return -1;
+    }
+    memcpy(out, name + prefix_len, version_len);
+    out[version_len] = '\0';
+    return is_safe_version(out) ? 0 : -1;
+}
+
+static int select_latest_prefixed_pkg(const char *url, const char *prefix, char *out_name, size_t out_sz) {
+    char **names = NULL;
+    size_t count = 0;
+    char best_name[PATH_MAX] = {0};
+    char best_ver[PATH_MAX] = {0};
+
+    if (collect_remote_tokens(url, ".syspckg", &names, &count) != 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < count; i++) {
+        char ver[PATH_MAX];
+        if (version_from_prefixed_pkg(names[i], prefix, ".syspckg", ver, sizeof(ver)) != 0) {
+            continue;
+        }
+        if (best_name[0] == '\0' || compare_versions(ver, best_ver) > 0) {
+            snprintf(best_name, sizeof(best_name), "%s", names[i]);
+            snprintf(best_ver, sizeof(best_ver), "%s", ver);
+        }
+    }
+    free_strings(names, count);
+    if (best_name[0] == '\0' || strlen(best_name) + 1 > out_sz) {
+        return -1;
+    }
+    snprintf(out_name, out_sz, "%s", best_name);
+    return 0;
+}
+
+static int resolve_latest_system_update(const char *root, char *out_url, size_t out_url_sz,
+                                        char *out_version, size_t out_version_sz) {
+    char current_version[64];
+    char source_url[PATH_MAX];
+    char versions_url[PATH_MAX];
+    char **names = NULL;
+    size_t count = 0;
+    char best[64] = {0};
+
+    if (get_os_version(root, current_version, sizeof(current_version)) != 0 ||
+        !is_safe_version(current_version) ||
+        get_source_url(source_url, sizeof(source_url)) != 0 ||
+        join_url2(source_url, "", versions_url, sizeof(versions_url)) != 0 ||
+        collect_remote_tokens(versions_url, "/", &names, &count) != 0) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        char ver[64];
+        if (strip_trailing_slash(names[i], ver, sizeof(ver)) != 0 || !is_safe_version(ver)) {
+            continue;
+        }
+        if (strcmp(ver, "kernel") == 0 || strcmp(ver, "packages") == 0 || strcmp(ver, "packager") == 0) {
+            continue;
+        }
+        if (compare_versions(ver, current_version) <= 0) {
+            continue;
+        }
+        if (best[0] == '\0' || compare_versions(ver, best) > 0) {
+            snprintf(best, sizeof(best), "%s", ver);
+        }
+    }
+    free_strings(names, count);
+    if (best[0] == '\0') {
+        return 1;
+    }
+    if (snprintf(out_version, out_version_sz, "%s", best) >= (int)out_version_sz) {
+        return -1;
+    }
+    return snprintf(out_url, out_url_sz, "%s/%s/adavalinux-%s.syspckg", source_url, best, best) < (int)out_url_sz ? 0 : -1;
+}
+
+static int resolve_latest_kernel_update(const char *root, char *out_url, size_t out_url_sz,
+                                        char *out_remote_version, size_t out_remote_version_sz,
+                                        char *out_local_version, size_t out_local_version_sz) {
+    char source_url[PATH_MAX];
+    char kernel_url[PATH_MAX];
+    char best_name[PATH_MAX];
+    char remote_version[128];
+    char local_version[128] = {0};
+    char previous_version[128];
+
+    out_url[0] = '\0';
+    out_remote_version[0] = '\0';
+    out_local_version[0] = '\0';
+
+    if (get_source_url(source_url, sizeof(source_url)) != 0 ||
+        join_url2(source_url, "kernel/", kernel_url, sizeof(kernel_url)) != 0 ||
+        select_latest_prefixed_pkg(kernel_url, "kernel-", best_name, sizeof(best_name)) != 0 ||
+        version_from_prefixed_pkg(best_name, "kernel-", ".syspckg", remote_version, sizeof(remote_version)) != 0 ||
+        snprintf(out_remote_version, out_remote_version_sz, "%s", remote_version) >= (int)out_remote_version_sz) {
+        return -1;
+    }
+    if (latest_boot_version(root, "vmlinuz-", "", local_version, sizeof(local_version),
+                            previous_version, sizeof(previous_version)) == 0 &&
+        local_version[0] != '\0') {
+        if (snprintf(out_local_version, out_local_version_sz, "%s", local_version) >= (int)out_local_version_sz) {
+            return -1;
+        }
+        if (compare_versions(remote_version, local_version) <= 0) {
+            return 1;
+        }
+    }
+    return snprintf(out_url, out_url_sz, "%s%s", kernel_url, best_name) < (int)out_url_sz ? 0 : -1;
+}
+
+static int resolve_latest_packager_update(const char *root, char *out_url, size_t out_url_sz,
+                                          char *out_remote_version, size_t out_remote_version_sz,
+                                          char *out_local_version, size_t out_local_version_sz) {
+    char version[64];
+    char local_version[64];
+    char remote_version[64];
+    char source_url[PATH_MAX];
+    char packager_part[PATH_MAX];
+    char packager_url[PATH_MAX];
+    char best_name[PATH_MAX];
+
+    out_url[0] = '\0';
+    out_remote_version[0] = '\0';
+    out_local_version[0] = '\0';
+    if (get_os_version(root, version, sizeof(version)) != 0 ||
+        !is_safe_version(version) ||
+        get_packager_version(root, local_version, sizeof(local_version)) != 0 ||
+        get_source_url(source_url, sizeof(source_url)) != 0 ||
+        snprintf(packager_part, sizeof(packager_part), "%s/packager/", version) >= (int)sizeof(packager_part) ||
+        join_url2(source_url, packager_part, packager_url, sizeof(packager_url)) != 0 ||
+        select_latest_prefixed_pkg(packager_url, "syspckg-", best_name, sizeof(best_name)) != 0) {
+        return -1;
+    }
+    if (version_from_prefixed_pkg(best_name, "syspckg-", ".syspckg", remote_version, sizeof(remote_version)) != 0 ||
+        snprintf(out_remote_version, out_remote_version_sz, "%s", remote_version) >= (int)out_remote_version_sz ||
+        snprintf(out_local_version, out_local_version_sz, "%s", local_version) >= (int)out_local_version_sz) {
+        return -1;
+    }
+    if (compare_versions(remote_version, local_version) <= 0) {
+        return 1;
+    }
+    return snprintf(out_url, out_url_sz, "%s%s", packager_url, best_name) < (int)out_url_sz ? 0 : -1;
+}
+
+static int selector_base_without_version(const char *manifest_name, char *out, size_t out_sz) {
+    char name[PATH_MAX];
+    char *dash;
+
+    if (strip_syspckg_suffix(manifest_name, name, sizeof(name)) != 0) {
+        return -1;
+    }
+    dash = strrchr(name, '-');
+    if (dash != NULL && has_digit(dash + 1)) {
+        *dash = '\0';
+    }
+    if (!is_safe_pkgname(name) || strcmp(name, "adavalinux") == 0 ||
+        strcmp(name, "kernel") == 0 || strcmp(name, "syspckg") == 0) {
+        return -1;
+    }
+    return snprintf(out, out_sz, "%s", name) < (int)out_sz ? 0 : -1;
+}
+
+static int strip_list_suffix(const char *name, char *out, size_t out_sz) {
+    size_t name_len = strlen(name);
+    const char *suffix = ".list";
+    size_t suffix_len = strlen(suffix);
+
+    if (name_len <= suffix_len || strcmp(name + name_len - suffix_len, suffix) != 0 ||
+        name_len - suffix_len + 1 > out_sz) {
+        return -1;
+    }
+    memcpy(out, name, name_len - suffix_len);
+    out[name_len - suffix_len] = '\0';
+    return 0;
+}
+
+static int version_from_install_name(const char *install_name, const char *base, char *out, size_t out_sz) {
+    size_t base_len = strlen(base);
+    size_t name_len = strlen(install_name);
+    size_t ver_len;
+
+    if (name_len <= base_len + 1 || strncmp(install_name, base, base_len) != 0 ||
+        install_name[base_len] != '-') {
+        return -1;
+    }
+    ver_len = name_len - base_len - 1;
+    if (ver_len == 0 || ver_len + 1 > out_sz) {
+        return -1;
+    }
+    memcpy(out, install_name + base_len + 1, ver_len);
+    out[ver_len] = '\0';
+    return 0;
+}
+
+static int collect_installed_update_packages(const char *root, installed_pkg_t **out, size_t *out_count) {
+    char dir[PATH_MAX];
+    DIR *d;
+    struct dirent *de;
+    installed_pkg_t *items = NULL;
+    size_t count = 0;
+
+    *out = NULL;
+    *out_count = 0;
+    if (snprintf(dir, sizeof(dir), "%s/var/lib/syspckg/installed", root) >= (int)sizeof(dir)) {
+        return -1;
+    }
+    d = opendir(dir);
+    if (!d) {
+        return -1;
+    }
+    while ((de = readdir(d)) != NULL) {
+        char installed_name[PATH_MAX];
+        char selector[PATH_MAX];
+        if (!has_suffix(de->d_name, ".list")) {
+            continue;
+        }
+        if (strip_list_suffix(de->d_name, installed_name, sizeof(installed_name)) != 0 ||
+            selector_base_without_version(installed_name, selector, sizeof(selector)) != 0) {
+            continue;
+        }
+        installed_pkg_t item;
+        memset(&item, 0, sizeof(item));
+        if (snprintf(item.base, sizeof(item.base), "%s", selector) >= (int)sizeof(item.base) ||
+            snprintf(item.installed_name, sizeof(item.installed_name), "%s", installed_name) >= (int)sizeof(item.installed_name) ||
+            version_from_install_name(installed_name, selector, item.installed_version, sizeof(item.installed_version)) != 0) {
+            continue;
+        }
+        installed_pkg_t *next = realloc(items, (count + 1) * sizeof(*items));
+        if (!next) {
+            free(items);
+            closedir(d);
+            return -1;
+        }
+        items = next;
+        items[count++] = item;
+    }
+    closedir(d);
+    *out = items;
+    *out_count = count;
+    return 0;
+}
+
+static int find_installed_package_for_update(const char *root, const char *install_name,
+                                             char *out, size_t out_sz) {
+    char wanted_base[PATH_MAX];
+    char dir[PATH_MAX];
+    DIR *d;
+    struct dirent *de;
+    char best[PATH_MAX] = {0};
+
+    out[0] = '\0';
+    if (selector_base_without_version(install_name, wanted_base, sizeof(wanted_base)) != 0 ||
+        snprintf(dir, sizeof(dir), "%s/var/lib/syspckg/installed", root) >= (int)sizeof(dir)) {
+        return 0;
+    }
+    d = opendir(dir);
+    if (!d) {
+        return 0;
+    }
+    while ((de = readdir(d)) != NULL) {
+        char installed_name[PATH_MAX];
+        char installed_base[PATH_MAX];
+
+        if (!has_suffix(de->d_name, ".list") ||
+            strip_list_suffix(de->d_name, installed_name, sizeof(installed_name)) != 0 ||
+            selector_base_without_version(installed_name, installed_base, sizeof(installed_base)) != 0 ||
+            strcmp(installed_base, wanted_base) != 0) {
+            continue;
+        }
+        if (best[0] == '\0' || compare_versions(installed_name, best) > 0) {
+            snprintf(best, sizeof(best), "%s", installed_name);
+        }
+    }
+    closedir(d);
+    if (best[0] == '\0') {
+        return 0;
+    }
+    return snprintf(out, out_sz, "%s", best) < (int)out_sz ? 1 : -1;
+}
+
+static int find_remote_update_for_installed(char **remote_names,
+                                            size_t remote_count,
+                                            const installed_pkg_t *installed,
+                                            char *out_name,
+                                            size_t out_name_sz,
+                                            char *out_version,
+                                            size_t out_version_sz) {
+    char best_name[PATH_MAX] = {0};
+    char best_ver[PATH_MAX] = {0};
+    size_t base_len = strlen(installed->base);
+
+    out_name[0] = '\0';
+    out_version[0] = '\0';
+    for (size_t i = 0; i < remote_count; i++) {
+        const char *name = remote_names[i];
+        size_t name_len = strlen(name);
+        const char *suffix = ".syspckg";
+        size_t suffix_len = strlen(suffix);
+        char ver[PATH_MAX];
+        size_t ver_len;
+
+        if (name_len <= base_len + 1 + suffix_len ||
+            strncmp(name, installed->base, base_len) != 0 ||
+            name[base_len] != '-' ||
+            strcmp(name + name_len - suffix_len, suffix) != 0) {
+            continue;
+        }
+        ver_len = name_len - base_len - 1 - suffix_len;
+        if (ver_len == 0 || ver_len >= sizeof(ver)) {
+            continue;
+        }
+        memcpy(ver, name + base_len + 1, ver_len);
+        ver[ver_len] = '\0';
+        if (!is_safe_version(ver)) {
+            continue;
+        }
+        if (best_name[0] == '\0' || compare_versions(ver, best_ver) > 0) {
+            snprintf(best_name, sizeof(best_name), "%s", name);
+            snprintf(best_ver, sizeof(best_ver), "%s", ver);
+        }
+    }
+    if (best_name[0] == '\0') {
+        return 0;
+    }
+    if (snprintf(out_name, out_name_sz, "%s", best_name) >= (int)out_name_sz ||
+        snprintf(out_version, out_version_sz, "%s", best_ver) >= (int)out_version_sz) {
+        return -1;
+    }
+    return compare_versions(best_ver, installed->installed_version) > 0 ? 1 : 0;
+}
+
+static int check_all_updates_from_manifest(const char *root, char ***out_urls, size_t *out_url_count) {
+    char version[64];
+    char source_url[PATH_MAX];
+    char packages_part[PATH_MAX];
+    char packages_url[PATH_MAX];
+    installed_pkg_t *installed = NULL;
+    size_t installed_count = 0;
+    char **remote_names = NULL;
+    size_t remote_count = 0;
+    char **urls = NULL;
+    size_t url_count = 0;
+    int rc = 0;
+
+    if (out_urls != NULL) {
+        *out_urls = NULL;
+    }
+    if (out_url_count != NULL) {
+        *out_url_count = 0;
+    }
+
+    if (get_os_version(root, version, sizeof(version)) != 0 ||
+        !is_safe_version(version) ||
+        get_source_url(source_url, sizeof(source_url)) != 0 ||
+        snprintf(packages_part, sizeof(packages_part), "%s/packages/", version) >= (int)sizeof(packages_part) ||
+        join_url2(source_url, packages_part, packages_url, sizeof(packages_url)) != 0 ||
+        collect_installed_update_packages(root, &installed, &installed_count) != 0 ||
+        collect_remote_tokens(packages_url, ".syspckg", &remote_names, &remote_count) != 0) {
+        free(installed);
+        free_strings(remote_names, remote_count);
+        return -1;
+    }
+
+    for (size_t i = 0; i < installed_count; i++) {
+        char remote_name[PATH_MAX];
+        char remote_version[PATH_MAX];
+        int update = find_remote_update_for_installed(remote_names,
+                                                      remote_count,
+                                                      &installed[i],
+                                                      remote_name,
+                                                      sizeof(remote_name),
+                                                      remote_version,
+                                                      sizeof(remote_version));
+        if (update < 0) {
+            rc = -1;
+            break;
+        }
+        if (update > 0) {
+            char remote_url[PATH_MAX];
+            printf("Update available: %s %s -> %s\n",
+                   installed[i].base,
+                   installed[i].installed_version,
+                   remote_version);
+            if (snprintf(remote_url, sizeof(remote_url), "%s%s", packages_url, remote_name) >= (int)sizeof(remote_url) ||
+                push_string(&urls, &url_count, remote_url) != 0) {
+                rc = -1;
+                break;
+            }
+        }
+    }
+
+    free(installed);
+    free_strings(remote_names, remote_count);
+    if (rc == 0 && out_urls != NULL && out_url_count != NULL) {
+        *out_urls = urls;
+        *out_url_count = url_count;
+    } else {
+        free_strings(urls, url_count);
+    }
+    return rc;
+}
+
 static int ensure_dir_recursive(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
     size_t len = strlen(path);
@@ -1564,8 +2147,13 @@ static int write_manifest(const char *install_dir, const char *root, const char 
     return 0;
 }
 
-static int remove_pkg(const char *root, const char *pkg_name) {
+static int remove_pkg_impl(const char *root, const char *pkg_name, int protect_packager) {
     char manifest_path[PATH_MAX];
+
+    if (protect_packager && is_packager_pkg_name(pkg_name)) {
+        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Cannot remove SystemPackager. Use update --packager instead.\n");
+        return -1;
+    }
     if (snprintf(manifest_path, sizeof(manifest_path),
                  "%s/var/lib/syspckg/installed/%s.list", root, pkg_name) >= (int)sizeof(manifest_path)) {
         return -1;
@@ -1622,20 +2210,173 @@ static int remove_pkg(const char *root, const char *pkg_name) {
     return 0;
 }
 
+static int remove_pkg(const char *root, const char *pkg_name) {
+    return remove_pkg_impl(root, pkg_name, 1);
+}
+
+static int latest_boot_version(const char *root, const char *prefix, const char *suffix,
+                               char *latest, size_t latest_sz,
+                               char *previous, size_t previous_sz) {
+    char dir_path[PATH_MAX];
+    DIR *d;
+    struct dirent *de;
+    size_t prefix_len = strlen(prefix);
+    size_t suffix_len = strlen(suffix);
+
+    latest[0] = '\0';
+    previous[0] = '\0';
+    if (snprintf(dir_path, sizeof(dir_path), "%s/boot", root) >= (int)sizeof(dir_path)) {
+        return -1;
+    }
+    d = opendir(dir_path);
+    if (!d) {
+        return -1;
+    }
+    while ((de = readdir(d)) != NULL) {
+        const char *name = de->d_name;
+        size_t name_len = strlen(name);
+        char ver[128];
+        size_t ver_len;
+
+        if (name_len <= prefix_len + suffix_len ||
+            strncmp(name, prefix, prefix_len) != 0 ||
+            strcmp(name + name_len - suffix_len, suffix) != 0) {
+            continue;
+        }
+        ver_len = name_len - prefix_len - suffix_len;
+        if (ver_len == 0 || ver_len >= sizeof(ver)) {
+            continue;
+        }
+        memcpy(ver, name + prefix_len, ver_len);
+        ver[ver_len] = '\0';
+        if (!is_safe_version(ver)) {
+            continue;
+        }
+        if (latest[0] == '\0' || compare_versions(ver, latest) > 0) {
+            if (latest[0] != '\0') {
+                snprintf(previous, previous_sz, "%s", latest);
+            }
+            snprintf(latest, latest_sz, "%s", ver);
+        } else if (strcmp(ver, latest) != 0 &&
+                   (previous[0] == '\0' || compare_versions(ver, previous) > 0)) {
+            snprintf(previous, previous_sz, "%s", ver);
+        }
+    }
+    closedir(d);
+    return latest[0] != '\0' ? 0 : -1;
+}
+
+static int relink_boot_file(const char *root, const char *target, const char *link_name) {
+    char link_path[PATH_MAX];
+    if (snprintf(link_path, sizeof(link_path), "%s/boot/%s", root, link_name) >= (int)sizeof(link_path)) {
+        return -1;
+    }
+    if (unlink(link_path) != 0 && errno != ENOENT) {
+        return -1;
+    }
+    return symlink(target, link_path);
+}
+
+static int target_uses_uefi(const char *root) {
+    char path[PATH_MAX];
+
+    if (snprintf(path, sizeof(path), "%s/sys/firmware/efi", root) < (int)sizeof(path) &&
+        file_exists(path)) {
+        return 1;
+    }
+    if (snprintf(path, sizeof(path), "%s/boot/efi", root) < (int)sizeof(path) &&
+        file_exists(path)) {
+        return 1;
+    }
+    return 0;
+}
+
+static const char *target_grub_package(const char *root) {
+    return target_uses_uefi(root) ? "grub-efi" : "grub-bios";
+}
+
+static int run_grub_mkconfig(const char *root) {
+    char *argv[] = { "chroot", (char *)root, "/usr/sbin/grub-mkconfig", "-o", "/boot/grub/grub.cfg", NULL };
+    return run_cmd(argv);
+}
+
+static int chmod_grub_generator(const char *root, const char *dir, const char *name, mode_t mode) {
+    char path[PATH_MAX];
+    if (snprintf(path, sizeof(path), "%s/%s/%s", root, dir, name) >= (int)sizeof(path)) {
+        return -1;
+    }
+    if (chmod(path, mode) != 0 && errno != ENOENT) {
+        return -1;
+    }
+    return 0;
+}
+
+static int disable_standard_grub_generators(const char *root) {
+    const char *dirs[] = { "usr/etc/grub.d", "etc/grub.d" };
+    const char *disable[] = {
+        "10_linux", "20_linux_xen", "25_bli", "30_os-prober",
+        "30_uefi-firmware", "40_custom", "41_custom"
+    };
+
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        for (size_t j = 0; j < sizeof(disable) / sizeof(disable[0]); j++) {
+            if (chmod_grub_generator(root, dirs[i], disable[j], 0644) != 0) {
+                return -1;
+            }
+        }
+        if (chmod_grub_generator(root, dirs[i], "00_header", 0755) != 0 ||
+            chmod_grub_generator(root, dirs[i], "10_adavalinux", 0755) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int configure_kernel_update_boot(const char *root) {
+    char latest[128];
+    char previous[128];
+    char initrd_latest[128];
+    char initrd_previous[128];
+    char target[256];
+
+    if (latest_boot_version(root, "vmlinuz-", "", latest, sizeof(latest), previous, sizeof(previous)) != 0) {
+        return -1;
+    }
+    snprintf(target, sizeof(target), "vmlinuz-%s", latest);
+    if (relink_boot_file(root, target, "vmlinuz") != 0) {
+        return -1;
+    }
+    if (latest_boot_version(root, "initramfs-disk-", ".gz",
+                            initrd_latest, sizeof(initrd_latest),
+                            initrd_previous, sizeof(initrd_previous)) == 0) {
+        snprintf(target, sizeof(target), "initramfs-disk-%s.gz", initrd_latest);
+        if (relink_boot_file(root, target, "initramfs-disk.gz") != 0) {
+            return -1;
+        }
+    }
+    (void)previous;
+    if (disable_standard_grub_generators(root) != 0) {
+        return -1;
+    }
+    return run_grub_mkconfig(root);
+}
+
 int main(int argc, char *argv[]) {
-    fprintf(stderr, "SYSPCKG by Adava for Linux in 2026 v1.0\n");
+    fprintf(stderr, "SystemPackager by Adava Software for Linux in 2026 v1.0\n");
     fflush(stderr);
 
     if (argc < 2) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
         fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-online] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
     }
 
     const char *cmd = argv[1];
     int is_list = (strcmp(cmd, "list") == 0 || strcmp(cmd, "list") == 0);
-    if (!is_list && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
+    int is_update = strcmp(cmd, "update") == 0;
+    if (!is_list && !is_update && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
         fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Unknown argument: %s\n", argv[1]);
         return 1;
     }
@@ -1643,6 +2384,7 @@ int main(int argc, char *argv[]) {
     if (!is_list && argc < 3) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
         fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-online] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
     }
@@ -1652,7 +2394,21 @@ int main(int argc, char *argv[]) {
     int online = 0;
     int local_only = 0;
     int assume_yes = 0;
-    int opt_start = is_list ? 2 : 3;
+    int dry_run = 0;
+    int update_all = 0;
+    int update_system = 0;
+    int update_kernel = 0;
+    int update_packager = 0;
+    const char *update_pkg_arg = NULL;
+    char update_selector[PATH_MAX] = {0};
+    char update_expected_version[64] = {0};
+    char packager_local_version[64] = {0};
+    char packager_remote_version[64] = {0};
+    char kernel_local_version[64] = {0};
+    char kernel_remote_version[64] = {0};
+    int packager_up_to_date = 0;
+    int kernel_up_to_date = 0;
+    int opt_start = is_list ? 2 : (is_update ? 2 : 3);
     for (int i = opt_start; i < argc; i++) {
         if (strcmp(argv[i], "--root") == 0) {
             if (i + 1 >= argc) {
@@ -1668,7 +2424,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
         if (strcmp(argv[i], "-online") == 0) {
-            if (is_list) {
+            if (is_list || is_update) {
                 log_err("-online is only valid for install");
                 return 1;
             }
@@ -1676,7 +2432,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
         if (strcmp(argv[i], "-local") == 0) {
-            if (is_list) {
+            if (is_list || is_update) {
                 log_err("-local is only valid for install");
                 return 1;
             }
@@ -1684,11 +2440,39 @@ int main(int argc, char *argv[]) {
             continue;
         }
         if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
-            if (is_list || strcmp(cmd, "install") != 0) {
-                log_err("-y/--yes is only valid for install");
+            if (is_list || strcmp(cmd, "remove") == 0) {
+                log_err("-y/--yes is only valid for install or update");
                 return 1;
             }
             assume_yes = 1;
+            continue;
+        }
+        if (is_update && strcmp(argv[i], "--dry-run") == 0) {
+            dry_run = 1;
+            continue;
+        }
+        if (is_update && strcmp(argv[i], "--all") == 0) {
+            update_all = 1;
+            continue;
+        }
+        if (is_update && strcmp(argv[i], "--system") == 0) {
+            update_system = 1;
+            continue;
+        }
+        if (is_update && strcmp(argv[i], "--kernel") == 0) {
+            update_kernel = 1;
+            continue;
+        }
+        if (is_update && strcmp(argv[i], "--packager") == 0) {
+            update_packager = 1;
+            continue;
+        }
+        if (is_update && argv[i][0] != '-') {
+            if (update_pkg_arg != NULL) {
+                log_err("Only one update package can be specified");
+                return 1;
+            }
+            update_pkg_arg = argv[i];
             continue;
         }
         fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Unknown option: %s\n", argv[i]);
@@ -1722,7 +2506,119 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    const char *pkg_arg = argv[2];
+    if (is_update) {
+        int mode_count = update_all + update_system + update_kernel + update_packager + (update_pkg_arg != NULL ? 1 : 0);
+        if (mode_count != 1) {
+            log_err("Use exactly one update target: <name>, --all, --system, --kernel or --packager");
+            return 1;
+        }
+
+        if (update_system) {
+            int resolved = resolve_latest_system_update(root, update_selector, sizeof(update_selector),
+                                                        update_expected_version, sizeof(update_expected_version));
+            if (resolved == 1) {
+                log_info("System is up to date");
+                return 0;
+            }
+            if (resolved != 0) {
+                log_err("Failed to resolve system update");
+                return 1;
+            }
+        } else if (update_kernel) {
+            int kernel_resolved = resolve_latest_kernel_update(root,
+                                                               update_selector,
+                                                               sizeof(update_selector),
+                                                               kernel_remote_version,
+                                                               sizeof(kernel_remote_version),
+                                                               kernel_local_version,
+                                                               sizeof(kernel_local_version));
+            if (kernel_resolved < 0) {
+                log_err("Failed to resolve kernel update");
+                return 1;
+            }
+            if (kernel_resolved == 1) {
+                kernel_up_to_date = 1;
+            }
+        } else if (update_packager) {
+            int packager_resolved = resolve_latest_packager_update(root,
+                                                                   update_selector,
+                                                                   sizeof(update_selector),
+                                                                   packager_remote_version,
+                                                                   sizeof(packager_remote_version),
+                                                                   packager_local_version,
+                                                                   sizeof(packager_local_version));
+            if (packager_resolved < 0) {
+                log_err("Failed to resolve packager update");
+                return 1;
+            }
+            if (packager_resolved == 1) {
+                packager_up_to_date = 1;
+            }
+        } else if (update_pkg_arg != NULL) {
+            if (snprintf(update_selector, sizeof(update_selector), "%s", update_pkg_arg) >= (int)sizeof(update_selector)) {
+                log_err("Update selector too long");
+                return 1;
+            }
+        }
+
+        if (dry_run) {
+            if (update_all) {
+                char **update_urls = NULL;
+                size_t update_url_count = 0;
+                if (check_all_updates_from_manifest(root, &update_urls, &update_url_count) != 0) {
+                    log_err("Failed to check package updates");
+                    return 1;
+                }
+                free_strings(update_urls, update_url_count);
+                return 0;
+            }
+            if (update_packager && packager_up_to_date) {
+                printf("Packager is up to date: %s\n", packager_local_version);
+                return 0;
+            }
+            if (update_kernel && kernel_up_to_date) {
+                printf("Kernel is up to date: %s\n", kernel_local_version[0] ? kernel_local_version : kernel_remote_version);
+                return 0;
+            }
+            printf("Would install: %s\n", update_selector);
+            return 0;
+        }
+
+        if (update_packager && packager_up_to_date) {
+            printf("Packager is up to date: %s\n", packager_local_version);
+            return 0;
+        }
+        if (update_kernel && kernel_up_to_date) {
+            printf("Kernel is up to date: %s\n", kernel_local_version[0] ? kernel_local_version : kernel_remote_version);
+            return 0;
+        }
+
+        if (update_all) {
+            char **update_urls = NULL;
+            size_t update_url_count = 0;
+            int all_rc = 0;
+            if (check_all_updates_from_manifest(root, &update_urls, &update_url_count) != 0) {
+                log_err("Failed to check package updates");
+                return 1;
+            }
+            for (size_t i = 0; i < update_url_count; i++) {
+                char *child_argv[] = {
+                    argv[0], "update", update_urls[i], "--root", (char *)root,
+                    "--allow-root", "-y", NULL
+                };
+                if (run_cmd(child_argv) != 0) {
+                    all_rc = 1;
+                }
+            }
+            free_strings(update_urls, update_url_count);
+            return all_rc;
+        }
+
+        cmd = "install";
+        online = 1;
+    }
+
+    const char *pkg_arg = is_update ? update_selector : argv[2];
 
     char pkg_name[PATH_MAX];
     if (get_pkg_base(pkg_arg, pkg_name, sizeof(pkg_name)) != 0) {
@@ -1780,6 +2676,10 @@ int main(int argc, char *argv[]) {
         snprintf(initial_selector, sizeof(initial_selector), "%s", pkg_name);
     }
     if (push_string(&queue, &queue_count, initial_selector) != 0) {
+        log_err("Out of memory");
+        goto install_cleanup;
+    }
+    if (update_kernel && push_string(&queue, &queue_count, target_grub_package(root)) != 0) {
         log_err("Out of memory");
         goto install_cleanup;
     }
@@ -1847,10 +2747,11 @@ int main(int argc, char *argv[]) {
             }
             continue;
         }
-        if (strcmp(plan.pkg_id, os_id) != 0 || strcmp(plan.pkg_version, os_version) != 0) {
+        const char *expected_version = update_expected_version[0] != '\0' ? update_expected_version : os_version;
+        if (strcmp(plan.pkg_id, os_id) != 0 || strcmp(plan.pkg_version, expected_version) != 0) {
             if (is_root_request) {
                 fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Package built for %s %s, but target is %s %s\n",
-                        plan.pkg_id, plan.pkg_version, os_id, os_version);
+                        plan.pkg_id, plan.pkg_version, os_id, expected_version);
                 goto install_cleanup;
             }
             if (push_string(&missing, &missing_count, selector) != 0) {
@@ -1873,6 +2774,19 @@ int main(int argc, char *argv[]) {
                     goto install_cleanup;
                 }
             }
+        }
+        int installed_match = find_installed_package_for_update(root, plan.install_name,
+                                                               plan.installed_name,
+                                                               sizeof(plan.installed_name));
+        if (installed_match < 0) {
+            log_err("Failed to inspect installed package state");
+            goto install_cleanup;
+        }
+        if (!is_update && installed_match > 0 && strcmp(plan.installed_name, plan.install_name) != 0) {
+            fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET
+                    "Package already installed as %s. Use update instead.\n",
+                    plan.installed_name);
+            goto install_cleanup;
         }
         plan.installed = is_pkg_installed(root, plan.install_name);
 
@@ -1973,6 +2887,14 @@ int main(int argc, char *argv[]) {
         char msg[PATH_MAX + 64];
         snprintf(msg, sizeof(msg), "Installing %s", p->install_name);
         log_info(msg);
+        if (is_update && p->installed_name[0] != '\0' &&
+            strcmp(p->installed_name, p->install_name) != 0 &&
+            remove_pkg_impl(root, p->installed_name, update_packager ? 0 : 1) != 0) {
+            fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to remove old package version: %s\n",
+                    p->installed_name);
+            install_errors++;
+            continue;
+        }
         if (copy_tree(p->install_dir, "", root) != 0) {
             perror("copy_tree");
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to install package: %s\n", p->install_name);
@@ -1988,6 +2910,11 @@ int main(int argc, char *argv[]) {
     }
     if (install_errors > 0) {
         log_err("Some packages failed to install");
+        goto install_cleanup;
+    }
+
+    if (update_kernel && configure_kernel_update_boot(root) != 0) {
+        log_err("Kernel package installed, but boot configuration update failed");
         goto install_cleanup;
     }
 

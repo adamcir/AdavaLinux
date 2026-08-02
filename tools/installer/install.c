@@ -237,11 +237,12 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
     return -1;
 }
 
-static int install_grub_pkg(const char *pkg, InstallerLogFn log_fn, void *ctx)
+static int install_grub_pkg(const char *pkg, const char *target_root, InstallerLogFn log_fn, void *ctx)
 {
     const char *bases[] = { INSTALL_MNT "/packages", INSTALL_MNT "/syspckg", INSTALL_MNT };
     char pattern[256];
     char local_pkg[256];
+    int target_install = target_root != NULL && target_root[0] != '\0';
     size_t i;
 
     emit_log(log_fn, ctx, "Looking for local %s package on installer media", pkg);
@@ -249,25 +250,37 @@ static int install_grub_pkg(const char *pkg, InstallerLogFn log_fn, void *ctx)
         snprintf(pattern, sizeof(pattern), "%s/%s-*.syspckg", bases[i], pkg);
         emit_log(log_fn, ctx, "Checking %s", pattern);
         if (find_first_glob(pattern, local_pkg, sizeof(local_pkg)) == 0) {
-            char *argv[6];
+            char *argv[9];
             emit_log(log_fn, ctx, "Using local package: %s", local_pkg);
-            installer_build_syspckg_install_argv(argv, local_pkg, 1);
+            if (target_install) {
+                installer_build_syspckg_root_install_argv(argv, local_pkg, target_root, 1);
+            } else {
+                installer_build_syspckg_install_argv(argv, local_pkg, 1);
+            }
             return run_checked(argv, log_fn, ctx);
         }
         snprintf(pattern, sizeof(pattern), "%s/%s.syspckg", bases[i], pkg);
         emit_log(log_fn, ctx, "Checking %s", pattern);
         if (find_first_glob(pattern, local_pkg, sizeof(local_pkg)) == 0) {
-            char *argv[6];
+            char *argv[9];
             emit_log(log_fn, ctx, "Using local package: %s", local_pkg);
-            installer_build_syspckg_install_argv(argv, local_pkg, 1);
+            if (target_install) {
+                installer_build_syspckg_root_install_argv(argv, local_pkg, target_root, 1);
+            } else {
+                installer_build_syspckg_install_argv(argv, local_pkg, 1);
+            }
             return run_checked(argv, log_fn, ctx);
         }
     }
 
     {
-        char *argv[6];
+        char *argv[9];
         emit_log(log_fn, ctx, "No local package found; using syspckg repository install");
-        installer_build_syspckg_install_argv(argv, pkg, 0);
+        if (target_install) {
+            installer_build_syspckg_root_install_argv(argv, pkg, target_root, 0);
+        } else {
+            installer_build_syspckg_install_argv(argv, pkg, 0);
+        }
         return run_checked(argv, log_fn, ctx);
     }
 }
@@ -437,35 +450,6 @@ static int find_kernel(char *kernel_name, size_t kernel_name_size)
     return 0;
 }
 
-static int write_grub_cfg(const InstallerConfig *cfg, const char *kernel_name, const char *root_arg)
-{
-    char content[4096];
-    const char *extra = cfg->acpi_mode == INSTALLER_ACPI_OFF ?
-        " acpi=off noapic nolapic irqpoll pci=nomsi" : "";
-
-    snprintf(content, sizeof(content),
-             "set timeout=10\n"
-             "set default=0\n"
-             "terminal_input console\n"
-             "terminal_output console\n\n"
-             "menuentry \"AdavaLinux v1.0\" {\n"
-             "\techo 'Loading Linux ...'\n"
-             "\tlinux /boot/%s %s rootfstype=%s rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq%s quiet\n"
-             "\techo 'Loading initramfs...'\n"
-             "\tinitrd /boot/initramfs-disk.gz\n"
-             "}\n\n"
-             "menuentry \"AdavaLinux v1.0 (debug)\" {\n"
-             "\techo 'Loading Linux ...'\n"
-             "\tlinux /boot/%s %s rootfstype=%s rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq%s\n"
-             "\techo 'Loading initramfs...'\n"
-             "\tinitrd /boot/initramfs-disk.gz\n"
-             "}\n",
-             kernel_name, root_arg, FS_TYPE, extra,
-             kernel_name, root_arg, FS_TYPE, extra);
-
-    return installer_write_file(ROOT_MNT "/boot/grub/grub.cfg", content);
-}
-
 int installer_run_install(const InstallerConfig *cfg,
                           InstallerLogFn log_fn,
                           InstallerProgressFn progress_fn,
@@ -501,6 +485,9 @@ int installer_run_install(const InstallerConfig *cfg,
         (void)installer_run_command(mdev, log_fn, ctx);
     }
     installer_safe_umount(ROOT_MNT "/boot/efi", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/sys", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/proc", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/dev", log_fn, ctx);
     installer_safe_umount(ROOT_MNT, log_fn, ctx);
     installer_safe_umount(INSTALL_MNT, log_fn, ctx);
 
@@ -533,7 +520,7 @@ int installer_run_install(const InstallerConfig *cfg,
     }
 
     step(progress_fn, ctx, 18, "Installing GRUB package");
-    if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", log_fn, ctx) != 0) {
+    if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", NULL, log_fn, ctx) != 0) {
         return 1;
     }
 
@@ -621,6 +608,16 @@ int installer_run_install(const InstallerConfig *cfg,
         return 1;
     }
 
+    step(progress_fn, ctx, 72, "Installing target GRUB package");
+    if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", ROOT_MNT, log_fn, ctx) != 0) {
+        return 1;
+    }
+    if (installer_build_copy_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
+        emit_log(log_fn, ctx, "Failed to copy grub-mkconfig into target root");
+        return 1;
+    }
+
     step(progress_fn, ctx, 76, "Copying kernel");
     if (find_kernel(kernel_name, sizeof(kernel_name)) != 0) {
         emit_log(log_fn, ctx, "Kernel not found on installer media");
@@ -644,8 +641,32 @@ int installer_run_install(const InstallerConfig *cfg,
         return 1;
     }
     emit_log(log_fn, ctx, "Using root kernel argument: %s", root_arg);
-    if (write_grub_cfg(cfg, kernel_name, root_arg) != 0) {
-        emit_log(log_fn, ctx, "Failed to write grub.cfg: %s", strerror(errno));
+    {
+        const char *extra = cfg->acpi_mode == INSTALLER_ACPI_OFF ?
+            " acpi=off noapic nolapic irqpoll pci=nomsi" : "";
+        char default_grub[1024];
+        snprintf(default_grub, sizeof(default_grub),
+                 "GRUB_TIMEOUT=10\n"
+                 "GRUB_DEFAULT=0\n"
+                 "GRUB_CMDLINE_LINUX=\"%s rootfstype=%s rootwait rootdelay=5 rw console=ttyS0 console=tty1 nomodeset libata.force=noncq%s\"\n"
+                 "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n",
+                 root_arg, FS_TYPE, extra);
+        if (shell_checked("mkdir -p " ROOT_MNT "/etc/default", log_fn, ctx) != 0 ||
+            installer_write_file(ROOT_MNT "/etc/default/grub", default_grub) != 0) {
+            emit_log(log_fn, ctx, "Failed to write /etc/default/grub: %s", strerror(errno));
+            return 1;
+        }
+    }
+    if (installer_build_disable_standard_grub_generators_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0 ||
+        installer_build_prepare_grub_chroot_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0 ||
+        installer_build_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
+        emit_log(log_fn, ctx, "Failed to run grub-mkconfig");
+        installer_safe_umount(ROOT_MNT "/sys", log_fn, ctx);
+        installer_safe_umount(ROOT_MNT "/proc", log_fn, ctx);
+        installer_safe_umount(ROOT_MNT "/dev", log_fn, ctx);
         return 1;
     }
 
@@ -674,6 +695,11 @@ int installer_run_install(const InstallerConfig *cfg,
         }
         snprintf(dir_arg, sizeof(dir_arg), "--directory=%s", grub_dir);
         if (run_checked(grub_efi, log_fn, ctx) != 0) {
+            return 1;
+        }
+        if (installer_build_uefi_removable_fallback_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+            shell_checked(cmd, log_fn, ctx) != 0) {
+            emit_log(log_fn, ctx, "Failed to create UEFI removable fallback: EFI/BOOT/BOOTX64.EFI");
             return 1;
         }
     } else {
@@ -726,6 +752,9 @@ int installer_run_install(const InstallerConfig *cfg,
         (void)installer_run_command(sync_cmd, log_fn, ctx);
     }
     installer_safe_umount(ROOT_MNT "/boot/efi", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/sys", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/proc", log_fn, ctx);
+    installer_safe_umount(ROOT_MNT "/dev", log_fn, ctx);
     installer_safe_umount(ROOT_MNT, log_fn, ctx);
     installer_safe_umount(INSTALL_MNT, log_fn, ctx);
 

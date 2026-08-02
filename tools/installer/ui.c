@@ -44,6 +44,7 @@ typedef struct {
 
 typedef enum {
     STEP_WELCOME = 0,
+    STEP_MEDIA,
     STEP_DISK,
     STEP_BOOT,
     STEP_ACPI,
@@ -268,7 +269,6 @@ static int input_box(const char *title, const char *label, char *out, size_t out
 static int confirm_phrase_box(const InstallerConfig *cfg)
 {
     char expected[96];
-    char typed[96] = "";
     char body[512];
 
     snprintf(expected, sizeof(expected), "ERASE %s", cfg->disk);
@@ -278,14 +278,18 @@ static int confirm_phrase_box(const InstallerConfig *cfg)
     if (!message_box("Destructive Install", body, "I understand")) {
         return 0;
     }
-    if (!input_box("Final Confirmation", expected, typed, sizeof(typed), 0)) {
-        return 0;
-    }
-    if (strcmp(typed, expected) != 0) {
+
+    for (;;) {
+        char typed[96] = "";
+
+        if (!input_box("Final Confirmation", expected, typed, sizeof(typed), 0)) {
+            return 0;
+        }
+        if (installer_confirmation_phrase_matches(cfg->disk, typed)) {
+            return 1;
+        }
         message_box("Confirmation Failed", "The confirmation text did not match.", "Back");
-        return 0;
     }
-    return 1;
 }
 
 static void ui_log(void *ctx, const char *line)
@@ -361,12 +365,16 @@ static void draw_progress(ProgressUi *ui)
 {
     WINDOW *win;
     char bar[80];
+    char visual_lines[64][160];
+    int visual_colors[64];
+    int visual_count = 0;
     int i;
     int h = LINES > 26 ? 20 : LINES - 4;
     int w = COLS > 78 ? 72 : COLS - 4;
     int bar_width;
     int bar_x;
     int log_rows;
+    int log_width;
 
     if (h < 16) {
         h = 16;
@@ -381,11 +389,29 @@ static void draw_progress(ProgressUi *ui)
     if (bar_width < 24) {
         bar_width = 24;
     }
-    log_rows = h - 9;
+    log_rows = h - 10;
     if (log_rows > 15) {
         log_rows = 15;
     }
+    log_width = w - 8;
     bar_x = (w - (bar_width + 7)) / 2;
+
+    for (i = 0; i < ui->line_count && visual_count < 64; i++) {
+        size_t start = 0;
+        size_t next = 0;
+        do {
+            if (!installer_next_wrapped_log_segment(ui->lines[i],
+                                                   start,
+                                                   (size_t)log_width,
+                                                   visual_lines[visual_count],
+                                                   sizeof(visual_lines[visual_count]),
+                                                   &next)) {
+                break;
+            }
+            visual_colors[visual_count++] = ui->line_colors[i];
+            start = next;
+        } while (ui->lines[i][start] != '\0' && visual_count < 64);
+    }
 
     win = dialog_window(h, w, "Installing");
     mvwprintw(win, 2, 3, "%s", ui->step[0] ? ui->step : "Starting");
@@ -394,17 +420,17 @@ static void draw_progress(ProgressUi *ui)
     mvwprintw(win, 4, bar_x > 2 ? bar_x : 2, "%s", bar);
     wattroff(win, COLOR_PAIR(C_HILITE) | A_BOLD);
     mvwprintw(win, 6, 3, "Installation log:");
-    for (i = 0; i < ui->line_count && i < log_rows; i++) {
-        int idx = ui->line_count > log_rows ? ui->line_count - log_rows + i : i;
-        wattron(win, COLOR_PAIR(ui->line_colors[idx]));
-        if (ui->line_colors[idx] == C_OK) {
+    for (i = 0; i < visual_count && i < log_rows; i++) {
+        int idx = visual_count > log_rows ? visual_count - log_rows + i : i;
+        wattron(win, COLOR_PAIR(visual_colors[idx]));
+        if (visual_colors[idx] == C_OK) {
             wattron(win, A_BOLD);
         }
-        mvwprintw(win, 8 + i, 3, "%-*.*s", w - 6, w - 6, ui->lines[idx]);
-        if (ui->line_colors[idx] == C_OK) {
+        mvwprintw(win, 8 + i, 3, "%-*.*s", log_width, log_width, visual_lines[idx]);
+        if (visual_colors[idx] == C_OK) {
             wattroff(win, A_BOLD);
         }
-        wattroff(win, COLOR_PAIR(ui->line_colors[idx]));
+        wattroff(win, COLOR_PAIR(visual_colors[idx]));
     }
     footer("Please wait. Do not power off this machine.");
     wnoutrefresh(win);
@@ -482,8 +508,10 @@ static int password_pair_box(const char *title, const char *label, char *passwor
 static WizardStep previous_step(WizardStep step)
 {
     switch (step) {
-    case STEP_DISK:
+    case STEP_MEDIA:
         return STEP_WELCOME;
+    case STEP_DISK:
+        return STEP_MEDIA;
     case STEP_BOOT:
         return STEP_DISK;
     case STEP_ACPI:
@@ -512,6 +540,8 @@ static WizardStep next_step(WizardStep step)
 {
     switch (step) {
     case STEP_WELCOME:
+        return STEP_MEDIA;
+    case STEP_MEDIA:
         return STEP_DISK;
     case STEP_DISK:
         return STEP_BOOT;
@@ -543,6 +573,7 @@ static int summary_box(const InstallerConfig *cfg)
 
     snprintf(body, sizeof(body),
              "Disk:       %s\n"
+             "Media:      %s\n"
              "Boot mode:  %s\n"
              "ACPI:       %s\n"
              "Root size:  %s\n"
@@ -550,6 +581,7 @@ static int summary_box(const InstallerConfig *cfg)
              "Username:   %s\n\n"
              "The next screen starts the installation.",
              cfg->disk,
+             cfg->install_media,
              cfg->boot_mode == INSTALLER_BOOT_UEFI ? "UEFI" : "BIOS",
              cfg->acpi_mode == INSTALLER_ACPI_OFF ? "off" : "default",
              cfg->part_size[0] ? cfg->part_size : "use remaining/default",
@@ -560,13 +592,20 @@ static int summary_box(const InstallerConfig *cfg)
 
 int installer_ui_collect_config(InstallerConfig *cfg)
 {
+    InstallerDisk media[32];
     InstallerDisk disks[32];
+    size_t media_count = 0;
     size_t disk_count = 0;
+    size_t scanned_disk_count = 0;
     const char *boot_items[] = { "BIOS (legacy)", "UEFI" };
     const char *acpi_items[] = { "ACPI default", "ACPI=off (old hardware)" };
+    char media_labels[32][160];
     char disk_labels[32][160];
+    const char *media_items[32];
     const char *disk_items[32];
+    int disk_map[32];
     int selected;
+    int media_selected = 0;
     int disk_selected = 0;
     int boot_selected = 0;
     int acpi_selected = 0;
@@ -582,25 +621,75 @@ int installer_ui_collect_config(InstallerConfig *cfg)
         switch (step) {
         case STEP_WELCOME:
             if (!message_box("Welcome",
-                             "Welcome to AdavaLinux.\n\nThis installer will erase the selected disk and install a new system.\nThe interface is intentionally close to early Ubuntu text installers.",
+                             "Welcome to AdavaLinux.\n\nThis installer will erase the selected disk and install a AdavaLinux.",
                              "Continue")) {
                 return 0;
             }
             step = next_step(step);
             break;
 
+        case STEP_MEDIA:
+            if (installer_scan_install_media(media, 32, &media_count) != 0 || media_count == 0) {
+                message_box("No Install Media Found",
+                            "No supported installation media were found.\nSupported media include srX, sdX, vdX, xvdX, nvme and mmcblk devices.",
+                            "Back");
+                step = previous_step(step);
+                break;
+            }
+            for (i = 0; i < media_count; i++) {
+                snprintf(media_labels[i], sizeof(media_labels[i]), "%-16.16s %8llu MiB  %.96s",
+                         media[i].path, media[i].mib, media[i].model);
+                media_items[i] = media_labels[i];
+            }
+            if ((size_t)media_selected >= media_count) {
+                media_selected = 0;
+            }
+            selected = menu_box("Select Install Media",
+                                "Choose the media this installer is running from:",
+                                media_items,
+                                (int)media_count,
+                                media_selected);
+            if (selected < 0) {
+                step = previous_step(step);
+                break;
+            }
+            media_selected = selected;
+            snprintf(cfg->install_media, sizeof(cfg->install_media), "%s", media[selected].path);
+            if (strcmp(cfg->disk, cfg->install_media) == 0) {
+                cfg->disk[0] = '\0';
+                disk_selected = 0;
+            }
+            step = next_step(step);
+            break;
+
         case STEP_DISK:
-            if (installer_scan_disks(disks, 32, &disk_count) != 0 || disk_count == 0) {
+            if (installer_scan_disks(disks, 32, &scanned_disk_count) != 0 || scanned_disk_count == 0) {
                 message_box("No Disks Found",
                             "No supported target disks were found.\nSupported disks include sdX, vdX, xvdX, nvme and mmcblk.",
                             "Back");
                 step = previous_step(step);
                 break;
             }
-            for (i = 0; i < disk_count; i++) {
-                snprintf(disk_labels[i], sizeof(disk_labels[i]), "%-16.16s %8llu MiB  %.96s",
+            disk_count = 0;
+            for (i = 0; i < scanned_disk_count; i++) {
+                if (!installer_target_disk_available(disks[i].path, cfg->install_media)) {
+                    continue;
+                }
+                snprintf(disk_labels[disk_count], sizeof(disk_labels[disk_count]), "%-16.16s %8llu MiB  %.96s",
                          disks[i].path, disks[i].mib, disks[i].model);
-                disk_items[i] = disk_labels[i];
+                disk_items[disk_count] = disk_labels[disk_count];
+                disk_map[disk_count] = (int)i;
+                disk_count++;
+            }
+            if (disk_count == 0) {
+                message_box("No Target Disks Found",
+                            "No supported target disks were found after excluding the selected installation media.",
+                            "Back");
+                step = previous_step(step);
+                break;
+            }
+            if ((size_t)disk_selected >= disk_count) {
+                disk_selected = 0;
             }
             selected = menu_box("Select Target Disk",
                                 "Choose the disk to erase and install AdavaLinux onto:",
@@ -612,7 +701,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
                 break;
             }
             disk_selected = selected;
-            snprintf(cfg->disk, sizeof(cfg->disk), "%s", disks[selected].path);
+            snprintf(cfg->disk, sizeof(cfg->disk), "%s", disks[disk_map[selected]].path);
             step = next_step(step);
             break;
 

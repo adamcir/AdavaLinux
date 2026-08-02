@@ -63,6 +63,40 @@ int installer_supported_disk(const char *path)
     return 0;
 }
 
+int installer_supported_install_media(const char *path)
+{
+    const char *name;
+    size_t len;
+
+    if (installer_supported_disk(path)) {
+        return 1;
+    }
+    if (path == NULL || !has_prefix(path, "/dev/")) {
+        return 0;
+    }
+
+    name = path + 5;
+    len = strlen(name);
+    if (len >= 3 && len <= 4 && has_prefix(name, "sr")) {
+        unsigned int disk = 0;
+        char extra = 0;
+        return sscanf(name, "sr%u%c", &disk, &extra) == 1;
+    }
+
+    return 0;
+}
+
+int installer_target_disk_available(const char *disk, const char *install_media)
+{
+    if (!installer_supported_disk(disk)) {
+        return 0;
+    }
+    if (install_media != NULL && install_media[0] != '\0' && strcmp(disk, install_media) == 0) {
+        return 0;
+    }
+    return 1;
+}
+
 int installer_partition_path(const char *disk, int part_no, char *out, size_t out_size)
 {
     int written;
@@ -138,6 +172,36 @@ int installer_should_redraw_progress_log(long now_ms, long last_draw_ms, long mi
     return now_ms - last_draw_ms >= min_interval_ms;
 }
 
+int installer_next_wrapped_log_segment(const char *line,
+                                       size_t start,
+                                       size_t width,
+                                       char *out,
+                                       size_t out_size,
+                                       size_t *next)
+{
+    size_t len;
+    size_t take;
+
+    if (line == NULL || out == NULL || out_size == 0 || next == NULL || width == 0) {
+        return 0;
+    }
+    len = strlen(line);
+    if (start > len) {
+        return 0;
+    }
+    take = len - start;
+    if (take > width) {
+        take = width;
+    }
+    if (take >= out_size) {
+        take = out_size - 1;
+    }
+    memcpy(out, line + start, take);
+    out[take] = '\0';
+    *next = start + take;
+    return 1;
+}
+
 void installer_format_progress_bar(int percent, int width, char *out, size_t out_size)
 {
     int i;
@@ -189,6 +253,119 @@ void installer_build_syspckg_install_argv(char *argv[6], const char *selector, i
         argv[4] = NULL;
         argv[5] = NULL;
     }
+}
+
+void installer_build_syspckg_root_install_argv(char *argv[9],
+                                               const char *selector,
+                                               const char *root,
+                                               int local_only)
+{
+    argv[0] = "syspckg";
+    argv[1] = "install";
+    argv[2] = (char *)selector;
+    if (local_only) {
+        argv[3] = "-local";
+        argv[4] = "--root";
+        argv[5] = (char *)root;
+        argv[6] = "--allow-root";
+        argv[7] = "-y";
+        argv[8] = NULL;
+    } else {
+        argv[3] = "--root";
+        argv[4] = (char *)root;
+        argv[5] = "--allow-root";
+        argv[6] = "-y";
+        argv[7] = NULL;
+        argv[8] = NULL;
+    }
+}
+
+int installer_build_grub_mkconfig_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    written = snprintf(out, out_size, "chroot %s /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg", root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
+int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    written = snprintf(out, out_size,
+                       "mkdir -p %s/usr/sbin && cp -f /usr/sbin/grub-mkconfig %s/usr/sbin/grub-mkconfig && chmod 755 %s/usr/sbin/grub-mkconfig",
+                       root, root, root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
+int installer_build_prepare_grub_chroot_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    written = snprintf(out, out_size,
+                       "mkdir -p %s/dev %s/proc %s/sys && mount --bind /dev %s/dev && mount -t proc proc %s/proc && mount -t sysfs sysfs %s/sys",
+                       root, root, root, root, root, root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
+int installer_build_disable_standard_grub_generators_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    written = snprintf(out, out_size,
+                       "chmod a-x %s/usr/etc/grub.d/10_linux %s/usr/etc/grub.d/20_linux_xen %s/usr/etc/grub.d/25_bli %s/usr/etc/grub.d/30_os-prober %s/usr/etc/grub.d/30_uefi-firmware %s/usr/etc/grub.d/40_custom %s/usr/etc/grub.d/41_custom 2>/dev/null || true; "
+                       "chmod a-x %s/etc/grub.d/10_linux %s/etc/grub.d/20_linux_xen %s/etc/grub.d/25_bli %s/etc/grub.d/30_os-prober %s/etc/grub.d/30_uefi-firmware %s/etc/grub.d/40_custom %s/etc/grub.d/41_custom 2>/dev/null || true; "
+                       "chmod a+x %s/usr/etc/grub.d/00_header %s/usr/etc/grub.d/10_adavalinux %s/etc/grub.d/00_header %s/etc/grub.d/10_adavalinux 2>/dev/null || true",
+                       root, root, root, root, root, root, root,
+                       root, root, root, root, root, root, root,
+                       root, root, root, root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
+int installer_build_uefi_removable_fallback_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+    written = snprintf(out, out_size,
+                       "mkdir -p %s/boot/efi/EFI/BOOT && "
+                       "if [ ! -f %s/boot/efi/EFI/BOOT/BOOTX64.EFI ]; then "
+                       "if [ -f %s/boot/efi/EFI/AdavaLinux/grubx64.efi ]; then "
+                       "cp -f %s/boot/efi/EFI/AdavaLinux/grubx64.efi %s/boot/efi/EFI/BOOT/BOOTX64.EFI; "
+                       "else efi_file=\"$(find %s/boot/efi/EFI -type f -name '*.efi' | head -n 1)\"; "
+                       "[ -n \"$efi_file\" ] && cp -f \"$efi_file\" %s/boot/efi/EFI/BOOT/BOOTX64.EFI; fi; fi; "
+                       "test -f %s/boot/efi/EFI/BOOT/BOOTX64.EFI",
+                       root, root, root, root, root, root, root, root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
+int installer_confirmation_phrase_matches(const char *disk, const char *typed)
+{
+    char expected[96];
+    int written;
+
+    if (disk == NULL || disk[0] == '\0' || typed == NULL) {
+        return 0;
+    }
+    written = snprintf(expected, sizeof(expected), "ERASE %s", disk);
+    if (written < 0 || (size_t)written >= sizeof(expected)) {
+        return 0;
+    }
+    return strcmp(typed, expected) == 0;
 }
 
 int installer_valid_uuid_value(const char *value)

@@ -171,7 +171,10 @@ int installer_command_exists(const char *name)
     return 0;
 }
 
-int installer_scan_disks(InstallerDisk *disks, size_t max_disks, size_t *count)
+static int scan_block_devices(InstallerDisk *devices,
+                              size_t max_devices,
+                              size_t *count,
+                              int (*filter)(const char *path))
 {
     DIR *dir;
     struct dirent *ent;
@@ -200,24 +203,24 @@ int installer_scan_disks(InstallerDisk *disks, size_t max_disks, size_t *count)
             continue;
         }
         snprintf(dev, sizeof(dev), "/dev/%.48s", ent->d_name);
-        if (!installer_supported_disk(dev) || !installer_is_block_device(dev)) {
+        if (!filter(dev) || !installer_is_block_device(dev)) {
             continue;
         }
-        if (n >= max_disks) {
+        if (n >= max_devices) {
             continue;
         }
 
-        memset(&disks[n], 0, sizeof(disks[n]));
-        snprintf(disks[n].path, sizeof(disks[n].path), "%s", dev);
+        memset(&devices[n], 0, sizeof(devices[n]));
+        snprintf(devices[n].path, sizeof(devices[n].path), "%s", dev);
         snprintf(sys_path, sizeof(sys_path), "/sys/block/%.48s/size", ent->d_name);
         if (installer_read_first_line(sys_path, line, sizeof(line)) == 0) {
             sectors = strtoull(line, NULL, 10);
-            disks[n].mib = sectors / 2048ULL;
+            devices[n].mib = sectors / 2048ULL;
         }
         snprintf(sys_path, sizeof(sys_path), "/sys/block/%.48s/device/model", ent->d_name);
-        if (installer_read_first_line(sys_path, disks[n].model, sizeof(disks[n].model)) != 0 ||
-            disks[n].model[0] == '\0') {
-            snprintf(disks[n].model, sizeof(disks[n].model), "Block device");
+        if (installer_read_first_line(sys_path, devices[n].model, sizeof(devices[n].model)) != 0 ||
+            devices[n].model[0] == '\0') {
+            snprintf(devices[n].model, sizeof(devices[n].model), "Block device");
         }
         n++;
     }
@@ -225,6 +228,16 @@ int installer_scan_disks(InstallerDisk *disks, size_t max_disks, size_t *count)
     closedir(dir);
     *count = n;
     return 0;
+}
+
+int installer_scan_disks(InstallerDisk *disks, size_t max_disks, size_t *count)
+{
+    return scan_block_devices(disks, max_disks, count, installer_supported_disk);
+}
+
+int installer_scan_install_media(InstallerDisk *media, size_t max_media, size_t *count)
+{
+    return scan_block_devices(media, max_media, count, installer_supported_install_media);
 }
 
 static int wait_status_to_result(int status)

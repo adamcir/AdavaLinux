@@ -30,6 +30,26 @@ static void test_disk_support_filter(void)
     assert(installer_supported_disk("/dev/sr0") == 0);
 }
 
+static void test_install_media_support_filter(void)
+{
+    assert(installer_supported_install_media("/dev/sr0") == 1);
+    assert(installer_supported_install_media("/dev/sda") == 1);
+    assert(installer_supported_install_media("/dev/vda") == 1);
+    assert(installer_supported_install_media("/dev/xvda") == 1);
+    assert(installer_supported_install_media("/dev/nvme0n1") == 1);
+    assert(installer_supported_install_media("/dev/mmcblk0") == 1);
+    assert(installer_supported_install_media("/dev/sda1") == 0);
+    assert(installer_supported_install_media("/dev/loop0") == 0);
+}
+
+static void test_target_disk_excludes_selected_install_media(void)
+{
+    assert(installer_target_disk_available("/dev/sda", "/dev/sr0") == 1);
+    assert(installer_target_disk_available("/dev/sda", "/dev/sda") == 0);
+    assert(installer_target_disk_available("/dev/sda", "") == 1);
+    assert(installer_target_disk_available("/dev/sda1", "/dev/sr0") == 0);
+}
+
 static void test_partition_paths(void)
 {
     char out[64];
@@ -85,6 +105,21 @@ static void test_progress_log_redraw_throttle(void)
     assert(installer_should_redraw_progress_log(900, 1000, 200) == 1);
 }
 
+static void test_log_line_wraps_to_next_visual_row(void)
+{
+    char out[64];
+    size_t next;
+
+    assert(installer_next_wrapped_log_segment("Takhle pokracuje radek", 0, 20, out, sizeof(out), &next) == 1);
+    assert(strcmp(out, "Takhle pokracuje rad") == 0);
+    assert(next == 20);
+    assert(installer_next_wrapped_log_segment("Takhle pokracuje radek", next, 20, out, sizeof(out), &next) == 1);
+    assert(strcmp(out, "ek") == 0);
+    assert(next == strlen("Takhle pokracuje radek"));
+    assert(installer_next_wrapped_log_segment("short", 0, 20, out, sizeof(out), &next) == 1);
+    assert(strcmp(out, "short") == 0);
+}
+
 static void test_syspckg_install_argv_order(void)
 {
     char *argv[6];
@@ -103,6 +138,40 @@ static void test_syspckg_install_argv_order(void)
     assert(strcmp(argv[3], "-local") == 0);
     assert(strcmp(argv[4], "-y") == 0);
     assert(argv[5] == NULL);
+}
+
+static void test_syspckg_root_install_argv_order(void)
+{
+    char *argv[9];
+
+    installer_build_syspckg_root_install_argv(argv, "grub-bios", "/mnt/root", 0);
+    assert(strcmp(argv[0], "syspckg") == 0);
+    assert(strcmp(argv[1], "install") == 0);
+    assert(strcmp(argv[2], "grub-bios") == 0);
+    assert(strcmp(argv[3], "--root") == 0);
+    assert(strcmp(argv[4], "/mnt/root") == 0);
+    assert(strcmp(argv[5], "--allow-root") == 0);
+    assert(strcmp(argv[6], "-y") == 0);
+    assert(argv[7] == NULL);
+
+    installer_build_syspckg_root_install_argv(argv, "/mnt/install/packages/grub-bios.syspckg", "/mnt/root", 1);
+    assert(strcmp(argv[0], "syspckg") == 0);
+    assert(strcmp(argv[1], "install") == 0);
+    assert(strcmp(argv[2], "/mnt/install/packages/grub-bios.syspckg") == 0);
+    assert(strcmp(argv[3], "-local") == 0);
+    assert(strcmp(argv[4], "--root") == 0);
+    assert(strcmp(argv[5], "/mnt/root") == 0);
+    assert(strcmp(argv[6], "--allow-root") == 0);
+    assert(strcmp(argv[7], "-y") == 0);
+    assert(argv[8] == NULL);
+}
+
+static void test_confirmation_phrase_matches_exact_disk_phrase(void)
+{
+    assert(installer_confirmation_phrase_matches("/dev/sda", "ERASE /dev/sda") == 1);
+    assert(installer_confirmation_phrase_matches("/dev/sda", "ERASE /dev/vda") == 0);
+    assert(installer_confirmation_phrase_matches("/dev/sda", "erase /dev/sda") == 0);
+    assert(installer_confirmation_phrase_matches("", "ERASE ") == 0);
 }
 
 static void test_uuid_value_validation(void)
@@ -155,19 +224,77 @@ static void test_shutdown_links_command_covers_bin_and_sbin(void)
     assert(strstr(out, "ln -sf ../bin/busybox /mnt/root/sbin/halt") != NULL);
 }
 
+static void test_grub_mkconfig_command_targets_mounted_root(void)
+{
+    char out[512];
+
+    assert(installer_build_grub_mkconfig_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strcmp(out, "chroot /mnt/root /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg") == 0);
+}
+
+static void test_copy_grub_mkconfig_command_installs_target_file(void)
+{
+    char out[512];
+
+    assert(installer_build_copy_grub_mkconfig_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strcmp(out, "mkdir -p /mnt/root/usr/sbin && cp -f /usr/sbin/grub-mkconfig /mnt/root/usr/sbin/grub-mkconfig && chmod 755 /mnt/root/usr/sbin/grub-mkconfig") == 0);
+}
+
+static void test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems(void)
+{
+    char out[512];
+
+    assert(installer_build_prepare_grub_chroot_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strcmp(out, "mkdir -p /mnt/root/dev /mnt/root/proc /mnt/root/sys && mount --bind /dev /mnt/root/dev && mount -t proc proc /mnt/root/proc && mount -t sysfs sysfs /mnt/root/sys") == 0);
+}
+
+static void test_disable_standard_grub_generators_command_keeps_adavalinux_only(void)
+{
+    char out[768];
+
+    assert(installer_build_disable_standard_grub_generators_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strstr(out, "chmod a-x /mnt/root/usr/etc/grub.d/10_linux") != NULL);
+    assert(strstr(out, "/mnt/root/usr/etc/grub.d/20_linux_xen") != NULL);
+    assert(strstr(out, "/mnt/root/usr/etc/grub.d/30_os-prober") != NULL);
+    assert(strstr(out, "chmod a+x /mnt/root/usr/etc/grub.d/00_header") != NULL);
+    assert(strstr(out, "/mnt/root/usr/etc/grub.d/10_adavalinux") != NULL);
+    assert(strstr(out, "/mnt/root/etc/grub.d/10_adavalinux") != NULL);
+}
+
+static void test_uefi_removable_fallback_command_creates_bootx64(void)
+{
+    char out[768];
+
+    assert(installer_build_uefi_removable_fallback_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strstr(out, "mkdir -p /mnt/root/boot/efi/EFI/BOOT") != NULL);
+    assert(strstr(out, "/mnt/root/boot/efi/EFI/BOOT/BOOTX64.EFI") != NULL);
+    assert(strstr(out, "/mnt/root/boot/efi/EFI/AdavaLinux/grubx64.efi") != NULL);
+    assert(strstr(out, "find /mnt/root/boot/efi/EFI") != NULL);
+}
+
 int main(void)
 {
     test_username_validation();
     test_disk_support_filter();
+    test_install_media_support_filter();
+    test_target_disk_excludes_selected_install_media();
     test_partition_paths();
     test_progress_bar();
     test_root_arg_uses_device_path();
     test_fdisk_script_uses_part_size_for_bios_and_uefi();
     test_progress_log_redraw_throttle();
+    test_log_line_wraps_to_next_visual_row();
     test_syspckg_install_argv_order();
+    test_confirmation_phrase_matches_exact_disk_phrase();
+    test_syspckg_root_install_argv_order();
     test_uuid_value_validation();
     test_failure_summary_includes_recent_log_lines();
     test_shutdown_links_command_covers_bin_and_sbin();
+    test_grub_mkconfig_command_targets_mounted_root();
+    test_copy_grub_mkconfig_command_installs_target_file();
+    test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems();
+    test_disable_standard_grub_generators_command_keeps_adavalinux_only();
+    test_uefi_removable_fallback_command_creates_bootx64();
     puts("helper tests passed");
     return 0;
 }
