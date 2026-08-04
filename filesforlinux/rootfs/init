@@ -8,7 +8,12 @@ mount -t sysfs none /sys 2>/dev/null
 if ! awk '$2=="/dev"{found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
   mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs none /dev 2>/dev/null
 fi
+mkdir -p /dev/pts
+mount -t devpts -o mode=620,ptmxmode=666 devpts /dev/pts 2>/dev/null || true
 mdev -s 2>/dev/null || true
+# mdev creates /dev/ptmx as a standalone character device.  UNIX98 PTYs need
+# the devpts instance instead; make the conventional link after mdev has run.
+ln -sfn pts/ptmx /dev/ptmx 2>/dev/null || true
 [ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
 [ -c /dev/tty ] || mknod -m 666 /dev/tty c 5 0
 [ -c /dev/tty1 ] || mknod -m 600 /dev/tty1 c 4 1

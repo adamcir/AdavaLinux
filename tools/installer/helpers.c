@@ -135,26 +135,42 @@ int installer_build_root_arg(const char *root_dev, char *out, size_t out_size)
 
 int installer_build_fdisk_script(InstallerBootMode boot_mode,
                                 const char *part_size,
+                                const char *disk,
                                 char *out,
                                 size_t out_size)
 {
     int written;
-    const char *size = part_size != NULL && part_size[0] != '\0' ? part_size : "";
+    const char *size = part_size != NULL && part_size[0] != '\0' ? part_size : NULL;
 
     if (out == NULL || out_size == 0) {
         return -1;
     }
 
-    if (boot_mode == INSTALLER_BOOT_UEFI) {
+    if (size == NULL && (disk == NULL || disk[0] == '\0')) {
+        return -1;
+    }
+
+    if (size == NULL && boot_mode == INSTALLER_BOOT_UEFI) {
         written = snprintf(out, out_size,
-                           "echo o; echo n; echo p; echo 1; echo 2048; echo +512M; "
+                           "{ echo o; echo n; echo p; echo 1; echo 2048; echo +512M; "
+                           "echo n; echo p; echo 2; echo 1050624; echo \"$(( $(blockdev --getsz '%s') - 1 ))\"; "
+                           "echo t; echo 1; echo ef; echo a; echo 1; echo w; }",
+                           disk);
+    } else if (size == NULL) {
+        written = snprintf(out, out_size,
+                           "{ echo o; echo n; echo p; echo 1; echo 2048; echo \"$(( $(blockdev --getsz '%s') - 1 ))\"; "
+                           "echo a; echo 1; echo w; }",
+                           disk);
+    } else if (boot_mode == INSTALLER_BOOT_UEFI) {
+        written = snprintf(out, out_size,
+                           "{ echo o; echo n; echo p; echo 1; echo 2048; echo +512M; "
                            "echo n; echo p; echo 2; echo 1050624; echo '%s'; "
-                           "echo t; echo 1; echo ef; echo a; echo 1; echo w",
+                           "echo t; echo 1; echo ef; echo a; echo 1; echo w; }",
                            size);
     } else {
         written = snprintf(out, out_size,
-                           "echo o; echo n; echo p; echo 1; echo 2048; echo '%s'; "
-                           "echo a; echo 1; echo w",
+                           "{ echo o; echo n; echo p; echo 1; echo 2048; echo '%s'; "
+                           "echo a; echo 1; echo w; }",
                            size);
     }
 

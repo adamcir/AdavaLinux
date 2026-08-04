@@ -202,7 +202,7 @@ static int join_url2(const char *base, const char *part, char *out, size_t out_s
 }
 
 static int is_pkg_token_char(int c) {
-    return isalnum(c) || c == '.' || c == '_' || c == '-';
+    return isalnum(c) || c == '.' || c == '_' || c == '-' || c == '+';
 }
 
 static int name_exists(char **names, size_t count, const char *name) {
@@ -649,7 +649,7 @@ static int is_safe_version(const char *v) {
         if ((*p >= 'a' && *p <= 'z') ||
             (*p >= 'A' && *p <= 'Z') ||
             (*p >= '0' && *p <= '9') ||
-            *p == '.' || *p == '_' || *p == '-') {
+            *p == '.' || *p == '_' || *p == '-' || *p == '+') {
             continue;
         }
         return 0;
@@ -2276,7 +2276,7 @@ static int remove_pkg_impl(const char *root, const char *pkg_name, int protect_p
     char manifest_path[PATH_MAX];
 
     if (protect_packager && is_packager_pkg_name(pkg_name)) {
-        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Cannot remove SystemPackager. Use update --packager instead.\n");
+        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Cannot remove SystemPackager.\n");
         return -1;
     }
     if (snprintf(manifest_path, sizeof(manifest_path),
@@ -2580,7 +2580,8 @@ int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
         fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
-        fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s reinstall <name>|--all [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s update <name>|--all|--system|--kernel [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
     }
@@ -2588,15 +2589,16 @@ int main(int argc, char *argv[]) {
     const char *cmd = argv[1];
     int is_list = (strcmp(cmd, "list") == 0 || strcmp(cmd, "list") == 0);
     int is_update = strcmp(cmd, "update") == 0;
-    if (!is_list && !is_update && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
+    int is_reinstall = strcmp(cmd, "reinstall") == 0;
+    if (!is_list && !is_update && !is_reinstall && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
         fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Unknown argument: %s\n", argv[1]);
         return 1;
     }
 
-    if (!is_list && argc < 3) {
+    if (!is_list && !is_update && !is_reinstall && argc < 3) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
         fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
-        fprintf(stderr, "       %s update <name>|--all|--system|--kernel|--packager [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s update <name>|--all|--system|--kernel [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
     }
@@ -2610,6 +2612,8 @@ int main(int argc, char *argv[]) {
     int update_system = 0;
     int update_kernel = 0;
     int update_packager = 0;
+    int reinstall_all = 0;
+    const char *reinstall_pkg_arg = NULL;
     const char *update_pkg_arg = NULL;
     char update_selector[PATH_MAX] = {0};
     char update_expected_version[64] = {0};
@@ -2619,7 +2623,11 @@ int main(int argc, char *argv[]) {
     char kernel_remote_version[64] = {0};
     int packager_up_to_date = 0;
     int kernel_up_to_date = 0;
-    int opt_start = is_list ? 2 : (is_update ? 2 : 3);
+    int opt_start = is_list ? 2 : ((is_update || is_reinstall) ? 2 : 3);
+    if (is_reinstall && argc == 2) {
+        log_err("Reinstall requires a package name or --all");
+        return 1;
+    }
     for (int i = opt_start; i < argc; i++) {
         if (strcmp(argv[i], "--root") == 0) {
             if (i + 1 >= argc) {
@@ -2650,6 +2658,18 @@ int main(int argc, char *argv[]) {
             assume_yes = 1;
             continue;
         }
+        if (is_reinstall && strcmp(argv[i], "--all") == 0) {
+            reinstall_all = 1;
+            continue;
+        }
+        if (is_reinstall && argv[i][0] != '-') {
+            if (reinstall_pkg_arg != NULL) {
+                log_err("Only one reinstall package can be specified");
+                return 1;
+            }
+            reinstall_pkg_arg = argv[i];
+            continue;
+        }
         if (is_update && strcmp(argv[i], "--dry-run") == 0) {
             dry_run = 1;
             continue;
@@ -2667,8 +2687,8 @@ int main(int argc, char *argv[]) {
             continue;
         }
         if (is_update && strcmp(argv[i], "--packager") == 0) {
-            update_packager = 1;
-            continue;
+            log_err("update --packager was removed; use: syspckg update syspckg");
+            return 1;
         }
         if (is_update && argv[i][0] != '-') {
             if (update_pkg_arg != NULL) {
@@ -2699,6 +2719,33 @@ int main(int argc, char *argv[]) {
         }
         log_ok("Done");
         return 0;
+    }
+
+    if (is_reinstall) {
+        if (reinstall_all == (reinstall_pkg_arg != NULL)) {
+            log_err("Use exactly one reinstall target: <name> or --all");
+            return 1;
+        }
+        if (reinstall_all) {
+            installed_pkg_t *installed = NULL;
+            size_t installed_count = 0;
+            if (collect_installed_update_packages(root, &installed, &installed_count) != 0) {
+                log_err("Failed to enumerate installed packages");
+                return 1;
+            }
+            int all_rc = 0;
+            for (size_t i = 0; i < installed_count; i++) {
+                char *child_argv[] = {
+                    argv[0], "reinstall", installed[i].installed_name,
+                    "--root", (char *)root, "--allow-root", "-y", NULL
+                };
+                if (run_cmd(child_argv) != 0) {
+                    all_rc = 1;
+                }
+            }
+            free(installed);
+            return all_rc;
+        }
     }
 
     if (is_update) {
@@ -2812,7 +2859,7 @@ int main(int argc, char *argv[]) {
         cmd = "install";
     }
 
-    const char *pkg_arg = is_update ? update_selector : argv[2];
+    const char *pkg_arg = is_update ? update_selector : (is_reinstall ? reinstall_pkg_arg : argv[2]);
 
     char pkg_name[PATH_MAX];
     if (get_pkg_base(pkg_arg, pkg_name, sizeof(pkg_name)) != 0) {
@@ -2892,6 +2939,7 @@ int main(int argc, char *argv[]) {
         if (!strchr(selector, '/') &&
             !has_suffix(selector, ".syspckg") &&
             selector_has_explicit_version(selector) &&
+            !is_reinstall &&
             is_pkg_installed(root, selector)) {
             continue;
         }
@@ -2979,14 +3027,15 @@ int main(int argc, char *argv[]) {
             log_err("Failed to inspect installed package state");
             goto install_cleanup;
         }
-        if (!is_update && installed_match > 0 && strcmp(plan.installed_name, plan.install_name) != 0) {
+        if (!is_update && is_root_request && installed_match > 0 &&
+            strcmp(plan.installed_name, plan.install_name) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET
                     "Package already installed as %s. Use update instead.\n",
                     plan.installed_name);
             goto install_cleanup;
         }
         plan.installed = is_pkg_installed(root, plan.install_name);
-        if (is_root_request) {
+        if (is_reinstall && is_root_request) {
             plan.installed = 0;
         }
 
@@ -3000,6 +3049,9 @@ int main(int argc, char *argv[]) {
 
         for (size_t i = 0; i < plan.dep_count; i++) {
             const char *dep = plan.deps[i];
+            char installed_dep[PATH_MAX];
+            int dep_installed;
+
             if (!is_safe_pkgname(dep)) {
                 continue;
             }
@@ -3008,6 +3060,18 @@ int main(int argc, char *argv[]) {
             }
             if (name_exists(queue, queue_count, dep)) {
                 continue;
+            }
+            if (is_reinstall) {
+                dep_installed = find_installed_package_for_update(root, dep,
+                                                                   installed_dep,
+                                                                   sizeof(installed_dep));
+                if (dep_installed < 0) {
+                    log_err("Failed to inspect installed dependency state");
+                    goto install_cleanup;
+                }
+                if (dep_installed > 0) {
+                    continue;
+                }
             }
             if (push_string(&queue, &queue_count, dep) != 0) {
                 log_err("Out of memory");
@@ -3089,7 +3153,7 @@ int main(int argc, char *argv[]) {
         log_info(msg);
         if (is_update && p->installed_name[0] != '\0' &&
             strcmp(p->installed_name, p->install_name) != 0 &&
-            remove_pkg_impl(root, p->installed_name, update_packager ? 0 : 1) != 0) {
+            remove_pkg_impl(root, p->installed_name, 0) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to remove old package version: %s\n",
                     p->installed_name);
             install_errors++;

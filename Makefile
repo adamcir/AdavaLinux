@@ -58,7 +58,7 @@ ISO_OUT_BIOS := $(OUT_DIR)/adavalinux-bios.iso
 ISO_OUT_UEFI := $(OUT_DIR)/adavalinux-uefi.iso
 BIOS_HDD_IMG := $(OUT_DIR)/adavalinux-bios-hdd.qcow2
 UEFI_HDD_IMG := $(OUT_DIR)/adavalinux-uefi-hdd.qcow2
-HDD_SIZE ?= 2G
+HDD_SIZE ?= 10G
 SYSPCKG_MATCH := x86-64
 UEFI_ISO_VARS := $(OUT_DIR)/adavalinux-uefi-iso-vars.fd
 UEFI_INSTALL_VARS := $(OUT_DIR)/adavalinux-uefi-install-vars.fd
@@ -67,6 +67,7 @@ OVMF_CODE ?= /usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS_TEMPLATE ?= /usr/share/OVMF/OVMF_VARS_4M.fd
 QEMU ?= qemu-system-x86_64
 QEMU_IMG ?= qemu-img
+QEMU_UEFI_VIDEO ?= std
 
 .PHONY: all tools kernel busybox iso run-bios run-uefi run-bios-install run-uefi-install run-bios-hdd run-uefi-hdd clean help
 
@@ -104,6 +105,7 @@ ISO_OUT_BIOS="$(ISO_OUT_BIOS)"
 ISO_OUT_UEFI="$(ISO_OUT_UEFI)"
 SYSPCKG_MATCH="$(SYSPCKG_MATCH)"
 SYSPCKG_SYSROOT="$(SYSPCKG_SYSROOT)"
+QEMU_UEFI_VIDEO="$(QEMU_UEFI_VIDEO)"
 GRUB_I386_PC_DIR="$(GRUB_I386_PC_DIR)"
 GRUB_X86_64_EFI_DIR="$(GRUB_X86_64_EFI_DIR)"
 say() { printf "\n==> %s\n" "$$*"; }
@@ -537,6 +539,7 @@ run-bios-install:
 	if [ ! -f "$(BIOS_HDD_IMG)" ]; then
 	  "$(QEMU_IMG)" create -f qcow2 "$(BIOS_HDD_IMG)" "$(HDD_SIZE)"
 	fi
+	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
 	  -m 1024M \
 	  -drive file="$(BIOS_HDD_IMG)",format=qcow2 \
@@ -551,6 +554,7 @@ run-bios-hdd:
 	if [ ! -f "$(BIOS_HDD_IMG)" ]; then
 	  "$(QEMU_IMG)" create -f qcow2 "$(BIOS_HDD_IMG)" "$(HDD_SIZE)"
 	fi
+	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" -m 1024M -drive file="$(BIOS_HDD_IMG)",format=qcow2
 
 run-uefi:
@@ -567,7 +571,7 @@ run-uefi:
 	  -machine q35,accel=kvm \
       -cpu host \
       -m 1024 \
-      -device virtio-vga \
+      -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
       -drive if=pflash,format=raw,file="$(UEFI_ISO_VARS)" \
@@ -589,11 +593,12 @@ run-uefi-install:
 	if [ ! -f "$(UEFI_HDD_IMG)" ]; then
 	  "$(QEMU_IMG)" create -f qcow2 "$(UEFI_HDD_IMG)" "$(HDD_SIZE)"
 	fi
+	"$(QEMU_IMG)" resize "$(UEFI_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
 	  -machine q35,accel=kvm \
       -cpu host \
       -m 1024 \
-      -device virtio-vga \
+      -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
       -drive if=pflash,format=raw,file="$(UEFI_INSTALL_VARS)" \
@@ -616,11 +621,12 @@ run-uefi-hdd:
 	if [ ! -f "$(UEFI_HDD_IMG)" ]; then
 	  "$(QEMU_IMG)" create -f qcow2 "$(UEFI_HDD_IMG)" "$(HDD_SIZE)"
 	fi
+	"$(QEMU_IMG)" resize "$(UEFI_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
 	  -machine q35,accel=kvm \
       -cpu host \
       -m 1024 \
-      -device virtio-vga \
+      -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
       -drive if=pflash,format=raw,file="$(UEFI_HDD_VARS)" \

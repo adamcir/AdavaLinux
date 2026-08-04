@@ -168,10 +168,10 @@ static void draw_button_centered(WINDOW *win, int row, int win_width, const char
 static int message_box(const char *title, const char *body, const char *button)
 {
     const int w = 68;
-    WINDOW *win = dialog_window(12, w, title);
+    WINDOW *win = dialog_window(13, w, title);
 
-    (void)draw_wrapped_text(win, 2, 3, w - 6, 8, body);
-    draw_button_centered(win, 9, w, button);
+    (void)draw_wrapped_text(win, 2, 3, w - 6, 9, body);
+    draw_button_centered(win, 10, w, button);
     footer("Enter: continue   Esc: cancel");
     wrefresh(win);
     for (;;) {
@@ -648,7 +648,7 @@ static int summary_box(const InstallerConfig *cfg)
              "ACPI:       %s\n"
              "Root size:  %s\n"
              "Hostname:   %s\n"
-             "Username:   %s\n\n"
+             "New user:   %s\n\n"
              "The next screen starts the selected operation.",
              action,
              cfg->disk,
@@ -657,7 +657,7 @@ static int summary_box(const InstallerConfig *cfg)
              cfg->action == INSTALLER_ACTION_INSTALL ?
                  (cfg->acpi_mode == INSTALLER_ACPI_OFF ? "off" : "default") : "-",
              cfg->action == INSTALLER_ACTION_UPDATE ? "-" :
-                 (cfg->part_size[0] ? cfg->part_size : "use remaining/default"),
+                 (cfg->part_size[0] ? cfg->part_size : "all remaining space"),
              cfg->action == INSTALLER_ACTION_INSTALL ? cfg->hostname : "-",
              cfg->action == INSTALLER_ACTION_INSTALL ? cfg->username : "-");
     return message_box("Summary", body, "Start");
@@ -820,7 +820,7 @@ int installer_ui_collect_config(InstallerConfig *cfg)
 
         case STEP_PARTSIZE:
             if (!input_box("Root Partition Size",
-                           "fdisk size, for example +10G. Empty uses fdisk default:",
+                           "fdisk size, for example +10G. Empty uses all remaining space:",
                            cfg->part_size,
                            sizeof(cfg->part_size),
                            0)) {

@@ -50,6 +50,7 @@ int installer_partition_path(const char *disk, int part_no, char *out, size_t ou
 int installer_build_root_arg(const char *root_dev, char *out, size_t out_size);
 int installer_build_fdisk_script(InstallerBootMode boot_mode,
                                 const char *part_size,
+                                const char *disk,
                                 char *out,
                                 size_t out_size);
 void installer_format_progress_bar(int percent, int width, char *out, size_t out_size);

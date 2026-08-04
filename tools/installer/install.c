@@ -572,7 +572,7 @@ int installer_run_install(const InstallerConfig *cfg,
     }
 
     step(progress_fn, ctx, 28, "Partitioning disk");
-    if (installer_build_fdisk_script(cfg->boot_mode, cfg->part_size, cmd, sizeof(cmd)) != 0 ||
+    if (installer_build_fdisk_script(cfg->boot_mode, cfg->part_size, cfg->disk, cmd, sizeof(cmd)) != 0 ||
         snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " | fdisk '%s'", cfg->disk) < 0) {
         emit_log(log_fn, ctx, "Failed to build fdisk command");
         return 1;

@@ -90,11 +90,17 @@ static void test_fdisk_script_uses_part_size_for_bios_and_uefi(void)
 {
     char out[256];
 
-    assert(installer_build_fdisk_script(INSTALLER_BOOT_BIOS, "+20G", out, sizeof(out)) == 0);
-    assert(strcmp(out, "echo o; echo n; echo p; echo 1; echo 2048; echo '+20G'; echo a; echo 1; echo w") == 0);
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_BIOS, "", "/dev/sda", out, sizeof(out)) == 0);
+    assert(strcmp(out, "{ echo o; echo n; echo p; echo 1; echo 2048; echo \"$(( $(blockdev --getsz '/dev/sda') - 1 ))\"; echo a; echo 1; echo w; }") == 0);
 
-    assert(installer_build_fdisk_script(INSTALLER_BOOT_UEFI, "+20G", out, sizeof(out)) == 0);
-    assert(strcmp(out, "echo o; echo n; echo p; echo 1; echo 2048; echo +512M; echo n; echo p; echo 2; echo 1050624; echo '+20G'; echo t; echo 1; echo ef; echo a; echo 1; echo w") == 0);
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_UEFI, "", "/dev/sda", out, sizeof(out)) == 0);
+    assert(strcmp(out, "{ echo o; echo n; echo p; echo 1; echo 2048; echo +512M; echo n; echo p; echo 2; echo 1050624; echo \"$(( $(blockdev --getsz '/dev/sda') - 1 ))\"; echo t; echo 1; echo ef; echo a; echo 1; echo w; }") == 0);
+
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_BIOS, "+20G", "/dev/sda", out, sizeof(out)) == 0);
+    assert(strcmp(out, "{ echo o; echo n; echo p; echo 1; echo 2048; echo '+20G'; echo a; echo 1; echo w; }") == 0);
+
+    assert(installer_build_fdisk_script(INSTALLER_BOOT_UEFI, "+20G", "/dev/sda", out, sizeof(out)) == 0);
+    assert(strcmp(out, "{ echo o; echo n; echo p; echo 1; echo 2048; echo +512M; echo n; echo p; echo 2; echo 1050624; echo '+20G'; echo t; echo 1; echo ef; echo a; echo 1; echo w; }") == 0);
 }
 
 static void test_progress_log_redraw_throttle(void)
