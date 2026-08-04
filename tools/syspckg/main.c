@@ -678,13 +678,9 @@ static int is_safe_pkgname(const char *v) {
         return 0;
     }
     for (const char *p = v; *p; p++) {
-        if ((*p >= 'a' && *p <= 'z') ||
-            (*p >= 'A' && *p <= 'Z') ||
-            (*p >= '0' && *p <= '9') ||
-            *p == '.' || *p == '_' || *p == '-') {
-            continue;
+        if (!is_pkg_token_char((unsigned char)*p)) {
+            return 0;
         }
-        return 0;
     }
     return 1;
 }
@@ -3082,11 +3078,12 @@ int main(int argc, char *argv[]) {
     log_ok("Download phase complete");
 
     if (missing_count > 0) {
-        printf(COLOR_YELLOW "WARN: " COLOR_RESET "Missing dependencies will be skipped: ");
+        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Missing required dependencies: ");
         for (size_t i = 0; i < missing_count; i++) {
-            printf("%s%s", missing[i], (i + 1 < missing_count) ? ", " : "");
+            fprintf(stderr, "%s%s", missing[i], (i + 1 < missing_count) ? ", " : "");
         }
-        printf("\n");
+        fprintf(stderr, "\n");
+        goto install_cleanup;
     }
 
     char **to_install_names = NULL;

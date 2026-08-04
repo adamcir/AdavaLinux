@@ -189,6 +189,10 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
                                      InstallerLogFn log_fn, void *ctx)
 {
     const char *bases[] = {
+        /* The live initramfs copy is deliberately first.  On some optical
+         * boot paths GRUB can receive EIO while reading modules from the
+         * mounted ISO even though the same files are present there. */
+        "/grub-install-modules",
         INSTALL_MNT "/grub-install-modules",
         "/boot/grub",
         "/usr/lib/grub",

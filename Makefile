@@ -25,6 +25,7 @@ JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 CROSS_COMPILE ?=
 KERNEL_DEFCONFIG ?= defconfig
 SYSPCKG_SYSROOT ?=
+SYSPCKG_PACKAGE_DIR ?= $(PROJECT_DIR)/../syspckg/packages
 GRUB_I386_PC_DIR ?=
 GRUB_X86_64_EFI_DIR ?=
 
@@ -105,6 +106,7 @@ ISO_OUT_BIOS="$(ISO_OUT_BIOS)"
 ISO_OUT_UEFI="$(ISO_OUT_UEFI)"
 SYSPCKG_MATCH="$(SYSPCKG_MATCH)"
 SYSPCKG_SYSROOT="$(SYSPCKG_SYSROOT)"
+SYSPCKG_PACKAGE_DIR="$(SYSPCKG_PACKAGE_DIR)"
 QEMU_UEFI_VIDEO="$(QEMU_UEFI_VIDEO)"
 GRUB_I386_PC_DIR="$(GRUB_I386_PC_DIR)"
 GRUB_X86_64_EFI_DIR="$(GRUB_X86_64_EFI_DIR)"
@@ -426,6 +428,28 @@ iso:
 	say "Copying rootfs templates from filesforlinux"
 	[ -d "$$FILESFORLINUX_ROOTFS_DIR" ] || die "Rootfs template directory not found: $$FILESFORLINUX_ROOTFS_DIR"
 	cp -a "$$FILESFORLINUX_ROOTFS_DIR/." "$$ROOTFS_DIR/"
+	# GRUB is executed by the live installer.  Keep its complete runtime
+	# dependency closure in the installer-local SystemPackager repository so
+	# UEFI installation neither needs network access nor skips liblzma.
+	say "Bundling GRUB installer dependency packages"
+	[ -d "$$SYSPCKG_PACKAGE_DIR" ] || die "SystemPackager package directory not found: $$SYSPCKG_PACKAGE_DIR"
+	mkdir -p "$$ROOTFS_DIR/usr/share/syspckg/packages"
+	for base in grub-bios grub-efi brotli bzip2 freetype libpng xz zlib; do
+	  pkg="$$(find "$$SYSPCKG_PACKAGE_DIR" -maxdepth 1 -type f -name "$$base-*.syspckg" -print -quit)"
+	  [ -n "$$pkg" ] || die "Missing installer GRUB dependency package: $$base"
+	  cp -f "$$pkg" "$$ROOTFS_DIR/usr/share/syspckg/packages/"
+	done
+	# Keep a second copy of the GRUB module trees in the live initramfs.  This
+	# avoids an optical-media read failure observed when grub-install accessed
+	# modinfo.sh through /mnt/install on the UEFI path.
+	say "Bundling GRUB install module trees into live initramfs"
+	ensure_grub_i386_pc_modules
+	ensure_grub_x86_64_efi_modules
+	mkdir -p "$$ROOTFS_DIR/grub-install-modules"
+	cp -a "$$GRUB_I386_PC_DIR" "$$ROOTFS_DIR/grub-install-modules/i386-pc"
+	cp -a "$$GRUB_X86_64_EFI_DIR" "$$ROOTFS_DIR/grub-install-modules/x86_64-efi"
+	[ -f "$$ROOTFS_DIR/grub-install-modules/i386-pc/modinfo.sh" ] || die "Bundled GRUB i386-pc modules are incomplete"
+	[ -f "$$ROOTFS_DIR/grub-install-modules/x86_64-efi/modinfo.sh" ] || die "Bundled GRUB x86_64-efi modules are incomplete"
 	[ -d "$$FILESFORLINUX_DISK_INITRAMFS_DIR" ] || die "disk initramfs template directory not found: $$FILESFORLINUX_DISK_INITRAMFS_DIR"
 	cp -a "$$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$$DISK_INITRAMFS_DIR/"
 	for req in etc/os-release init etc/motd etc/profile etc/inittab etc/init.d/rcS usr/share/udhcpc/default.script; do
