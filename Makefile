@@ -70,7 +70,7 @@ QEMU ?= qemu-system-x86_64
 QEMU_IMG ?= qemu-img
 QEMU_UEFI_VIDEO ?= std
 
-.PHONY: all tools kernel busybox iso run-bios run-uefi run-bios-install run-uefi-install run-bios-hdd run-uefi-hdd clean help
+.PHONY: all tools kernel busybox iso xfce run-bios run-uefi run-bios-install run-uefi-install run-bios-hdd run-uefi-hdd clean help
 
 define COMMON_SH
 set -eu
@@ -291,6 +291,9 @@ endef
 
 all: tools kernel busybox iso
 
+xfce:
+	"$(PROJECT_DIR)/../xfce/build-xfce.sh" --all
+
 tools:
 	$(COMMON_SH)
 	need_cmd make
@@ -432,24 +435,6 @@ iso:
 	# dependency closure in the installer-local SystemPackager repository so
 	# UEFI installation neither needs network access nor skips liblzma.
 	say "Bundling GRUB installer dependency packages"
-	[ -d "$$SYSPCKG_PACKAGE_DIR" ] || die "SystemPackager package directory not found: $$SYSPCKG_PACKAGE_DIR"
-	mkdir -p "$$ROOTFS_DIR/usr/share/syspckg/packages"
-	for base in grub-bios grub-efi brotli bzip2 freetype libpng xz zlib; do
-	  pkg="$$(find "$$SYSPCKG_PACKAGE_DIR" -maxdepth 1 -type f -name "$$base-*.syspckg" -print -quit)"
-	  [ -n "$$pkg" ] || die "Missing installer GRUB dependency package: $$base"
-	  cp -f "$$pkg" "$$ROOTFS_DIR/usr/share/syspckg/packages/"
-	done
-	# Keep a second copy of the GRUB module trees in the live initramfs.  This
-	# avoids an optical-media read failure observed when grub-install accessed
-	# modinfo.sh through /mnt/install on the UEFI path.
-	say "Bundling GRUB install module trees into live initramfs"
-	ensure_grub_i386_pc_modules
-	ensure_grub_x86_64_efi_modules
-	mkdir -p "$$ROOTFS_DIR/grub-install-modules"
-	cp -a "$$GRUB_I386_PC_DIR" "$$ROOTFS_DIR/grub-install-modules/i386-pc"
-	cp -a "$$GRUB_X86_64_EFI_DIR" "$$ROOTFS_DIR/grub-install-modules/x86_64-efi"
-	[ -f "$$ROOTFS_DIR/grub-install-modules/i386-pc/modinfo.sh" ] || die "Bundled GRUB i386-pc modules are incomplete"
-	[ -f "$$ROOTFS_DIR/grub-install-modules/x86_64-efi/modinfo.sh" ] || die "Bundled GRUB x86_64-efi modules are incomplete"
 	[ -d "$$FILESFORLINUX_DISK_INITRAMFS_DIR" ] || die "disk initramfs template directory not found: $$FILESFORLINUX_DISK_INITRAMFS_DIR"
 	cp -a "$$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$$DISK_INITRAMFS_DIR/"
 	for req in etc/os-release init etc/motd etc/profile etc/inittab etc/init.d/rcS usr/share/udhcpc/default.script; do
@@ -461,7 +446,7 @@ iso:
 	chmod 600 "$$ROOTFS_DIR/etc/shadow" 2>/dev/null || true
 	[ -f "$$DISK_INITRAMFS_DIR/init" ] || die "Required file missing in disk initramfs templates: init"
 	chmod +x "$$DISK_INITRAMFS_DIR/init"
-	say "Installing SystemPackager and bundled packages into rootfs"
+	say "Installing SystemPackager into rootfs"
 	SYSPCKG_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 	[ -x "$$SYSPCKG_BIN" ] || die "Executable syspckg not found: $$SYSPCKG_BIN"
 	SYSPCKG_INFO="$$(file -b "$$SYSPCKG_BIN" 2>/dev/null || true)"
@@ -469,7 +454,7 @@ iso:
 	  *"$$SYSPCKG_MATCH"*) ;;
 	  *) die "syspckg is not an x86_64 binary: $$SYSPCKG_INFO" ;;
 	esac
-	mkdir -p "$$ROOTFS_DIR/usr/bin" "$$ROOTFS_DIR/usr/share/syspckg/packages"
+	mkdir -p "$$ROOTFS_DIR/usr/bin"
 	cp -a "$$SYSPCKG_BIN" "$$ROOTFS_DIR/usr/bin/syspckg"
 	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
 	say "Copying runtime loader + required shared libraries for syspckg into rootfs"
@@ -498,15 +483,10 @@ iso:
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
 	fi
-	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg-source" ]; then
+	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" ]; then
 	  say "Copying syspckg source config into rootfs"
-	  mkdir -p "$$ROOTFS_DIR/etc" "$$ROOTFS_DIR/usr/share/syspckg"
-	  cp -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg-source" "$$ROOTFS_DIR/etc/syspckg-source"
-	  if [ -f "$$FILESFORLINUX_ROOTFS_DIR/usr/share/syspckg/source-url" ]; then
-	    cp -f "$$FILESFORLINUX_ROOTFS_DIR/usr/share/syspckg/source-url" "$$ROOTFS_DIR/usr/share/syspckg/source-url"
-	  else
-	    cp -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg-source" "$$ROOTFS_DIR/usr/share/syspckg/source-url"
-	  fi
+	  mkdir -p "$$ROOTFS_DIR/etc" "$$ROOTFS_DIR/etc/syspckg"
+	  cp -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" "$$ROOTFS_DIR/etc/syspckg/syspckg-source"
 	else
 	  say "syspckg-source not found in filesforlinux/rootfs/etc -> using syspckg built-in default URL"
 	fi
@@ -535,13 +515,6 @@ iso:
 	if ! grub-mkimage -d "$$GRUB_X86_64_EFI_DIR" -O x86_64-efi -p /boot/grub -o "$$OUT_DIR/grub-core-uefi.efi" iso9660 normal configfile >/dev/null 2>&1; then
 	  die "Missing GRUB UEFI x86_64-efi modules. Install grub-efi-amd64-bin or provide GRUB x86_64-efi modules."
 	fi
-	say "Copying full GRUB install module trees into ISO"
-	rm -rf "$$ISO_DIR/grub-install-modules"
-	mkdir -p "$$ISO_DIR/grub-install-modules"
-	cp -a "$$GRUB_I386_PC_DIR" "$$ISO_DIR/grub-install-modules/i386-pc"
-	cp -a "$$GRUB_X86_64_EFI_DIR" "$$ISO_DIR/grub-install-modules/x86_64-efi"
-	[ -f "$$ISO_DIR/grub-install-modules/i386-pc/kernel.img" ] || die "Copied GRUB i386-pc modules are incomplete"
-	[ -f "$$ISO_DIR/grub-install-modules/x86_64-efi/kernel.img" ] || die "Copied GRUB x86_64-efi modules are incomplete"
 	rm -f "$$OUT_DIR/grub-core-bios.img" "$$OUT_DIR/grub-core-uefi.efi"
 	grub-mkrescue --directory="$$GRUB_I386_PC_DIR" -o "$$ISO_OUT_BIOS" "$$ISO_DIR" >/dev/null
 	say "ISO created: $$ISO_OUT_BIOS"
