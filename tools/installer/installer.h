@@ -44,6 +44,7 @@ typedef void (*InstallerProgressFn)(void *ctx, int percent, const char *step);
 int installer_valid_username(const char *name);
 int installer_supported_disk(const char *path);
 int installer_supported_install_media(const char *path);
+int installer_partition_belongs_to_disk(const char *disk, const char *partition);
 int installer_target_disk_available(const char *disk, const char *install_media);
 int installer_confirmation_phrase_matches(const char *disk, const char *typed);
 int installer_partition_path(const char *disk, int part_no, char *out, size_t out_size);

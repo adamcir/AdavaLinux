@@ -148,6 +148,59 @@ static int mount_dev_at(const char *mountpoint, char *out, size_t out_size)
     return -1;
 }
 
+static int try_mount_install_media(const char *device, char *media_dev, size_t media_dev_size,
+                                   InstallerLogFn log_fn, void *ctx)
+{
+    char *const argv[] = { "mount", "-o", "ro", (char *)device, INSTALL_MNT, NULL };
+
+    installer_safe_umount(INSTALL_MNT, log_fn, ctx);
+    if (run_checked(argv, log_fn, ctx) != 0) {
+        return -1;
+    }
+    if (access(INSTALL_MNT "/boot/initramfs-installer.gz", F_OK) != 0) {
+        installer_safe_umount(INSTALL_MNT, log_fn, ctx);
+        return -1;
+    }
+    snprintf(media_dev, media_dev_size, "%s", device);
+    return 0;
+}
+
+static int mount_selected_disk_partition(const char *disk, char *media_dev, size_t media_dev_size,
+                                         InstallerLogFn log_fn, void *ctx)
+{
+    const char *disk_name = disk + 5;
+    char sys_path[PATH_MAX];
+    DIR *dir;
+    struct dirent *ent;
+
+    if (snprintf(sys_path, sizeof(sys_path), "/sys/class/block/%s", disk_name) >= (int)sizeof(sys_path)) {
+        return -1;
+    }
+    dir = opendir(sys_path);
+    if (dir == NULL) {
+        return -1;
+    }
+    while ((ent = readdir(dir)) != NULL) {
+        char candidate[PATH_MAX];
+        char partition_marker[PATH_MAX];
+
+        if (ent->d_name[0] == '.' ||
+            snprintf(candidate, sizeof(candidate), "/dev/%s", ent->d_name) >= (int)sizeof(candidate) ||
+            !installer_partition_belongs_to_disk(disk, candidate) ||
+            snprintf(partition_marker, sizeof(partition_marker), "%s/%s/partition", sys_path, ent->d_name) >=
+                (int)sizeof(partition_marker) ||
+            access(partition_marker, F_OK) != 0 || !installer_is_block_device(candidate)) {
+            continue;
+        }
+        if (try_mount_install_media(candidate, media_dev, media_dev_size, log_fn, ctx) == 0) {
+            closedir(dir);
+            return 0;
+        }
+    }
+    closedir(dir);
+    return -1;
+}
+
 static int parent_disk(const char *dev, char *out, size_t out_size)
 {
     size_t len;
@@ -189,11 +242,9 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
                                      InstallerLogFn log_fn, void *ctx)
 {
     const char *bases[] = {
-        /* The live initramfs copy is deliberately first.  On some optical
-         * boot paths GRUB can receive EIO while reading modules from the
-         * mounted ISO even though the same files are present there. */
-        "/grub-install-modules",
-        INSTALL_MNT "/grub-install-modules",
+        /* GRUB is installed into the RAM-backed live root before this
+         * lookup, so use its standard package-owned module location rather
+         * than reading a standalone tree from the mounted ISO. */
         "/boot/grub",
         "/usr/lib/grub",
         "/usr/lib64/grub",
@@ -321,10 +372,31 @@ static int detect_media(const InstallerConfig *cfg, char *media_dev, size_t medi
                         InstallerLogFn log_fn, void *ctx)
 {
     const char *env_media = getenv("INSTALL_MEDIA");
-    const char *cands[] = { "/dev/sr0", "/dev/sda1", "/dev/sda" };
+    InstallerDisk media[32];
+    size_t media_count = 0;
     size_t i;
 
     media_dev[0] = '\0';
+
+    /* A device selected in the installer UI is authoritative.  Never fall
+     * back to an optical drive or another disk after that choice. */
+    if (cfg != NULL && cfg->install_media[0] != '\0') {
+        if (!installer_is_block_device(cfg->install_media)) {
+            emit_log(log_fn, ctx, "Selected installer media is not a block device: %s", cfg->install_media);
+            return -1;
+        }
+        emit_log(log_fn, ctx, "Using selected installer media: %s", cfg->install_media);
+        if (installer_supported_disk(cfg->install_media) &&
+            mount_selected_disk_partition(cfg->install_media, media_dev, media_dev_size, log_fn, ctx) == 0) {
+            return 0;
+        }
+        if (try_mount_install_media(cfg->install_media, media_dev, media_dev_size, log_fn, ctx) == 0) {
+            return 0;
+        }
+        emit_log(log_fn, ctx, "Selected installer media does not contain AdavaLinux files: %s", cfg->install_media);
+        return -1;
+    }
+
     if (mount_dev_at(INSTALL_MNT, media_dev, media_dev_size) == 0 &&
         access(INSTALL_MNT "/boot/initramfs-installer.gz", F_OK) == 0) {
         return 0;
@@ -338,21 +410,25 @@ static int detect_media(const InstallerConfig *cfg, char *media_dev, size_t medi
             return -1;
         }
         if (run_checked(argv, log_fn, ctx) == 0) {
-            snprintf(media_dev, media_dev_size, "%s", env_media);
-            return 0;
+            if (access(INSTALL_MNT "/boot/initramfs-installer.gz", F_OK) == 0) {
+                snprintf(media_dev, media_dev_size, "%s", env_media);
+                return 0;
+            }
+            installer_safe_umount(INSTALL_MNT, log_fn, ctx);
         }
         return -1;
     }
 
-    (void)cfg;
-    for (i = 0; i < sizeof(cands) / sizeof(cands[0]); i++) {
-        char *const argv[] = { "mount", "-o", "ro", (char *)cands[i], INSTALL_MNT, NULL };
-        if (!installer_is_block_device(cands[i])) {
-            continue;
-        }
+    if (installer_scan_install_media(media, 32, &media_count) != 0) {
+        emit_log(log_fn, ctx, "Failed to scan installer media");
+        return -1;
+    }
+    for (i = 0; i < media_count; i++) {
+        char *const argv[] = { "mount", "-o", "ro", media[i].path, INSTALL_MNT, NULL };
         if (installer_run_command(argv, log_fn, ctx) == 0) {
             if (access(INSTALL_MNT "/boot/initramfs-installer.gz", F_OK) == 0) {
-                snprintf(media_dev, media_dev_size, "%s", cands[i]);
+                snprintf(media_dev, media_dev_size, "%.*s",
+                         (int)sizeof(media[i].path) - 1, media[i].path);
                 return 0;
             }
             installer_safe_umount(INSTALL_MNT, log_fn, ctx);
@@ -791,12 +867,6 @@ int installer_run_install(const InstallerConfig *cfg,
         snprintf(dir_arg, sizeof(dir_arg), "--directory=%s", grub_dir);
         if (run_checked(grub_bios, log_fn, ctx) != 0) {
             return 1;
-        }
-        if (installer_command_exists("grub-bios-setup")) {
-            snprintf(cmd, sizeof(cmd), "grub-bios-setup -v -d " ROOT_MNT "/boot/grub/i386-pc '%s'", cfg->disk);
-            if (shell_checked(cmd, log_fn, ctx) != 0) {
-                return 1;
-            }
         }
         if (access(ROOT_MNT "/boot/grub/i386-pc/core.img", F_OK) != 0) {
             emit_log(log_fn, ctx, "Missing BIOS GRUB core.img after grub-install");

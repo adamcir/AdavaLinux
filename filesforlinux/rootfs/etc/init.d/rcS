@@ -3,6 +3,14 @@
 [ -f /etc/hostname ] && hostname -F /etc/hostname 2>/dev/null || true
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
+if [ -x /usr/bin/dbus-daemon ]; then
+  mkdir -p /run/dbus
+  chown messagebus:messagebus /run/dbus 2>/dev/null || true
+  if [ ! -S /run/dbus/system_bus_socket ]; then
+    /usr/bin/dbus-daemon --system >/dev/null 2>&1 || true
+  fi
+fi
+
 if command -v udhcpc >/dev/null 2>&1; then
   ip link set eth0 up 2>/dev/null || true
   sleep 1

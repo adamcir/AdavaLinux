@@ -86,6 +86,39 @@ int installer_supported_install_media(const char *path)
     return 0;
 }
 
+int installer_partition_belongs_to_disk(const char *disk, const char *partition)
+{
+    const char *disk_name;
+    const char *part_name;
+    const char *suffix;
+
+    if (!installer_supported_disk(disk) || partition == NULL || !has_prefix(partition, "/dev/")) {
+        return 0;
+    }
+
+    disk_name = disk + 5;
+    part_name = partition + 5;
+    if (!has_prefix(part_name, disk_name)) {
+        return 0;
+    }
+    suffix = part_name + strlen(disk_name);
+    if (strncmp(disk_name, "nvme", 4) == 0 || strncmp(disk_name, "mmcblk", 6) == 0) {
+        if (*suffix != 'p') {
+            return 0;
+        }
+        suffix++;
+    }
+    if (*suffix == '\0') {
+        return 0;
+    }
+    while (*suffix != '\0') {
+        if (!isdigit((unsigned char)*suffix++)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int installer_target_disk_available(const char *disk, const char *install_media)
 {
     if (!installer_supported_disk(disk)) {

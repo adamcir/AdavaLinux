@@ -42,6 +42,16 @@ static void test_install_media_support_filter(void)
     assert(installer_supported_install_media("/dev/loop0") == 0);
 }
 
+static void test_media_partition_belongs_to_selected_disk(void)
+{
+    assert(installer_partition_belongs_to_disk("/dev/sdb", "/dev/sdb1") == 1);
+    assert(installer_partition_belongs_to_disk("/dev/nvme0n1", "/dev/nvme0n1p2") == 1);
+    assert(installer_partition_belongs_to_disk("/dev/mmcblk0", "/dev/mmcblk0p3") == 1);
+    assert(installer_partition_belongs_to_disk("/dev/sdb", "/dev/sdb") == 0);
+    assert(installer_partition_belongs_to_disk("/dev/sdb", "/dev/sdc1") == 0);
+    assert(installer_partition_belongs_to_disk("/dev/sdb", "/dev/sr0") == 0);
+}
+
 static void test_target_disk_excludes_selected_install_media(void)
 {
     assert(installer_target_disk_available("/dev/sda", "/dev/sr0") == 1);
@@ -308,6 +318,7 @@ int main(void)
     test_username_validation();
     test_disk_support_filter();
     test_install_media_support_filter();
+    test_media_partition_belongs_to_selected_disk();
     test_target_disk_excludes_selected_install_media();
     test_partition_paths();
     test_progress_bar();

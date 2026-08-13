@@ -18,14 +18,14 @@
 #define COLOR_RESET "\033[0m"
 
 #ifndef SYSPCKG_SOURCE_FILE
-#define SYSPCKG_SOURCE_FILE "/etc/syspckg-source"
+#define SYSPCKG_SOURCE_FILE "/etc/syspckg/syspckg-source"
 #endif
 
 #ifndef SYSPCKG_VERSION_FILE
-#define SYSPCKG_VERSION_FILE "/usr/share/syspckg/syspckg-version"
+#define SYSPCKG_VERSION_FILE "/etc/syspckg/syspckg-version"
 #endif
 
-#define SYSPCKG_VERSION "1.0.1"
+#define SYSPCKG_VERSION "1.0"
 #define DEFAULT_SOURCE_URL "http://192.168.10.7/products/AdavaLinux"
 
 typedef struct installed_pkg installed_pkg_t;
@@ -81,6 +81,53 @@ static int run_cmd(char *const argv[]) {
         return -1;
     }
     return 0;
+}
+
+/* Every package install/removal can change shared-library SONAMEs.  The
+ * AdavaLinux runtime libraries live in /usr/lib and, for some imported
+ * packages, /usr/lib/x86_64-linux-gnu; both are configured in ld.so.conf.
+ * Rebuild the target cache once the transaction has finished. */
+static int refresh_dynamic_linker_cache(const char *root) {
+    char ldconfig_path[PATH_MAX];
+    if (snprintf(ldconfig_path, sizeof(ldconfig_path), "%s/sbin/ldconfig",
+                 strcmp(root, "/") == 0 ? "" : root) >= (int)sizeof(ldconfig_path)) {
+        return -1;
+    }
+    if (access(ldconfig_path, X_OK) != 0) {
+        return 0;
+    }
+    char *argv[] = { "/sbin/ldconfig", "-r", (char *)root, NULL };
+    return run_cmd(argv);
+}
+
+static int copy_archive_to_dir(const char *archive_path, const char *output_dir) {
+    const char *base = strrchr(archive_path, '/');
+    char output_path[PATH_MAX];
+    FILE *in;
+    FILE *out;
+    char buffer[32768];
+    size_t n;
+
+    base = base ? base + 1 : archive_path;
+    if (snprintf(output_path, sizeof(output_path), "%s/%s", output_dir, base) >= (int)sizeof(output_path)) {
+        return -1;
+    }
+    in = fopen(archive_path, "rb");
+    out = fopen(output_path, "wb");
+    if (!in || !out) {
+        if (in) fclose(in);
+        if (out) fclose(out);
+        return -1;
+    }
+    while ((n = fread(buffer, 1, sizeof(buffer), in)) != 0) {
+        if (fwrite(buffer, 1, n, out) != n) {
+            fclose(in);
+            fclose(out);
+            return -1;
+        }
+    }
+    int rc = ferror(in) || fclose(in) != 0 || fclose(out) != 0 ? -1 : 0;
+    return rc;
 }
 
 static void cleanup_tmpdir(void) {
@@ -1984,8 +2031,52 @@ static int run_package_hook(const char *install_dir, const char *root, const cha
         errno = EINVAL;
         return -1;
     }
-    log_info("Running install.sh");
+    log_info("Running package hook");
     char *argv[] = { "/bin/sh", hook_path, (char *)root, (char *)action, NULL };
+    return run_cmd(argv);
+}
+
+static int save_remove_hook(const char *install_dir, const char *root, const char *pkg_name) {
+    char source[PATH_MAX];
+    char hooks_dir[PATH_MAX];
+    char destination[PATH_MAX];
+    struct stat st;
+
+    if (snprintf(source, sizeof(source), "%s/remove.sh", install_dir) >= (int)sizeof(source) ||
+        snprintf(hooks_dir, sizeof(hooks_dir), "%s/var/lib/syspckg/hooks", root) >= (int)sizeof(hooks_dir) ||
+        snprintf(destination, sizeof(destination), "%s/%s.remove.sh", hooks_dir, pkg_name) >= (int)sizeof(destination)) {
+        return -1;
+    }
+    if (lstat(source, &st) != 0) {
+        if (errno == ENOENT) {
+            unlink(destination);
+            return 0;
+        }
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode) || ensure_dir_recursive(hooks_dir, 0755) != 0) {
+        return -1;
+    }
+    return copy_file_contents(source, destination, 0700);
+}
+
+static int run_remove_hook(const char *root, const char *pkg_name) {
+    char hook_path[PATH_MAX];
+    struct stat st;
+
+    if (snprintf(hook_path, sizeof(hook_path), "%s/var/lib/syspckg/hooks/%s.remove.sh", root, pkg_name) >=
+        (int)sizeof(hook_path)) {
+        return -1;
+    }
+    if (lstat(hook_path, &st) != 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    log_info("Running remove.sh");
+    char *argv[] = { "/bin/sh", hook_path, (char *)root, "remove", NULL };
     return run_cmd(argv);
 }
 
@@ -2319,6 +2410,15 @@ static int remove_pkg_impl(const char *root, const char *pkg_name, int protect_p
     }
     fclose(f);
 
+    if (run_remove_hook(root, pkg_name) != 0) {
+        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Remove hook failed for: %s\n", pkg_name);
+        for (size_t i = 0; i < dir_count; i++) {
+            free(dirs[i]);
+        }
+        free(dirs);
+        return -1;
+    }
+
     if (dir_count > 1) {
         qsort(dirs, dir_count, sizeof(*dirs), cmp_dir_len_desc);
     }
@@ -2328,11 +2428,50 @@ static int remove_pkg_impl(const char *root, const char *pkg_name, int protect_p
     }
     free(dirs);
     unlink(manifest_path);
+    {
+        char hook_path[PATH_MAX];
+        if (snprintf(hook_path, sizeof(hook_path), "%s/var/lib/syspckg/hooks/%s.remove.sh", root, pkg_name) <
+            (int)sizeof(hook_path)) {
+            unlink(hook_path);
+        }
+    }
     return 0;
 }
 
 static int remove_pkg(const char *root, const char *pkg_name) {
     return remove_pkg_impl(root, pkg_name, 1);
+}
+
+static int remove_pkg_with_deps(const char *root, const char *pkg_name,
+                                const char *tmpdir, int local_only, int depth) {
+    char resolved_name[PATH_MAX];
+    char archive_path[PATH_MAX];
+    char pkg_ver[64], pkg_id[64], pkg_version[64];
+    char **deps = NULL;
+    size_t dep_count = 0;
+
+    if (depth > 64 || resolve_pkg_archive_path(root, tmpdir, pkg_name, local_only,
+                                                resolved_name, sizeof(resolved_name),
+                                                archive_path, sizeof(archive_path)) != 0 ||
+        read_pkg_metadata_from_archive(archive_path, pkg_ver, sizeof(pkg_ver),
+                                       pkg_id, sizeof(pkg_id), pkg_version, sizeof(pkg_version),
+                                       &deps, &dep_count) != 0) {
+        free_strings(deps, dep_count);
+        return -1;
+    }
+    if (remove_pkg(root, pkg_name) != 0) {
+        free_strings(deps, dep_count);
+        return -1;
+    }
+    for (size_t i = 0; i < dep_count; i++) {
+        if (is_safe_pkgname(deps[i]) && is_pkg_installed(root, deps[i]) &&
+            remove_pkg_with_deps(root, deps[i], tmpdir, local_only, depth + 1) != 0) {
+            free_strings(deps, dep_count);
+            return -1;
+        }
+    }
+    free_strings(deps, dep_count);
+    return 0;
 }
 
 static int latest_boot_version(const char *root, const char *prefix, const char *suffix,
@@ -2575,25 +2714,25 @@ int main(int argc, char *argv[]) {
 
     if (argc < 2) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
-        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
-        fprintf(stderr, "       %s reinstall <name>|--all [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
-        fprintf(stderr, "       %s update <name>|--all|--system|--kernel [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
-        fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
+        fprintf(stderr, "       %s install <name-or-file>... [--no-deps] [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s update <name>|--all|--system|--kernel [--with-deps] [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s remove <name> [--with-deps] [--root <path>] [--allow-root]\n", argv[0]);
+        fprintf(stderr, "       %s download <name-or-file> [--no-deps] [--output <dir>] [-local]\n", argv[0]);
         return 1;
     }
 
     const char *cmd = argv[1];
     int is_list = (strcmp(cmd, "list") == 0 || strcmp(cmd, "list") == 0);
     int is_update = strcmp(cmd, "update") == 0;
-    int is_reinstall = strcmp(cmd, "reinstall") == 0;
-    if (!is_list && !is_update && !is_reinstall && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
+    int is_download = strcmp(cmd, "download") == 0;
+    if (!is_list && !is_update && !is_download && strcmp(cmd, "install") != 0 && strcmp(cmd, "remove") != 0) {
         fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Unknown argument: %s\n", argv[1]);
         return 1;
     }
 
-    if (!is_list && !is_update && !is_reinstall && argc < 3) {
+    if (!is_list && !is_update && argc < 3) {
         fprintf(stderr, "Usage: %s list [--root <path>] [--allow-root]\n", argv[0]);
-        fprintf(stderr, "       %s install <name-or-file> [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
+        fprintf(stderr, "       %s install <name-or-file>... [--root <path>] [--allow-root] [-local] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s update <name>|--all|--system|--kernel [--dry-run] [--root <path>] [--allow-root] [-y|--yes]\n", argv[0]);
         fprintf(stderr, "       %s remove <name> [--root <path>] [--allow-root]\n", argv[0]);
         return 1;
@@ -2608,8 +2747,6 @@ int main(int argc, char *argv[]) {
     int update_system = 0;
     int update_kernel = 0;
     int update_packager = 0;
-    int reinstall_all = 0;
-    const char *reinstall_pkg_arg = NULL;
     const char *update_pkg_arg = NULL;
     char update_selector[PATH_MAX] = {0};
     char update_expected_version[64] = {0};
@@ -2619,11 +2756,15 @@ int main(int argc, char *argv[]) {
     char kernel_remote_version[64] = {0};
     int packager_up_to_date = 0;
     int kernel_up_to_date = 0;
-    int opt_start = is_list ? 2 : ((is_update || is_reinstall) ? 2 : 3);
-    if (is_reinstall && argc == 2) {
-        log_err("Reinstall requires a package name or --all");
-        return 1;
+    int with_deps = 0;
+    int no_deps = 0;
+    const char *download_output = ".";
+    const char *install_pkg_args[argc];
+    size_t install_pkg_count = 0;
+    if (strcmp(cmd, "install") == 0) {
+        install_pkg_args[install_pkg_count++] = argv[2];
     }
+    int opt_start = is_list ? 2 : (is_update ? 2 : 3);
     for (int i = opt_start; i < argc; i++) {
         if (strcmp(argv[i], "--root") == 0) {
             if (i + 1 >= argc) {
@@ -2636,6 +2777,30 @@ int main(int argc, char *argv[]) {
         }
         if (strcmp(argv[i], "--allow-root") == 0) {
             allow_root = 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--with-deps") == 0) {
+            if (strcmp(cmd, "install") == 0 || is_download) {
+                log_err("--with-deps is only valid for update or remove");
+                return 1;
+            }
+            with_deps = 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--no-deps") == 0) {
+            if (strcmp(cmd, "install") != 0 && !is_download) {
+                log_err("--no-deps is only valid for install or download");
+                return 1;
+            }
+            no_deps = 1;
+            continue;
+        }
+        if (is_download && strcmp(argv[i], "--output") == 0) {
+            if (i + 1 >= argc) {
+                log_err("Missing value for --output");
+                return 1;
+            }
+            download_output = argv[++i];
             continue;
         }
         if (strcmp(argv[i], "-local") == 0 || strcmp(argv[i], "--local") == 0) {
@@ -2652,18 +2817,6 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             assume_yes = 1;
-            continue;
-        }
-        if (is_reinstall && strcmp(argv[i], "--all") == 0) {
-            reinstall_all = 1;
-            continue;
-        }
-        if (is_reinstall && argv[i][0] != '-') {
-            if (reinstall_pkg_arg != NULL) {
-                log_err("Only one reinstall package can be specified");
-                return 1;
-            }
-            reinstall_pkg_arg = argv[i];
             continue;
         }
         if (is_update && strcmp(argv[i], "--dry-run") == 0) {
@@ -2694,8 +2847,24 @@ int main(int argc, char *argv[]) {
             update_pkg_arg = argv[i];
             continue;
         }
+        if (strcmp(cmd, "install") == 0 && argv[i][0] != '-') {
+            install_pkg_args[install_pkg_count++] = argv[i];
+            continue;
+        }
         fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Unknown option: %s\n", argv[i]);
         return 1;
+    }
+
+    if (with_deps && no_deps) {
+        log_err("Use only one dependency mode");
+        return 1;
+    }
+    if (is_download) {
+        struct stat st;
+        if (stat(download_output, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            log_err("Download output directory does not exist");
+            return 1;
+        }
     }
 
     if (strcmp(cmd, "remove") == 0 && local_only) {
@@ -2703,9 +2872,41 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (strcmp(root, "/") == 0 && !allow_root && !is_adavalinux_root(root)) {
+    if (!is_download && strcmp(root, "/") == 0 && !allow_root && !is_adavalinux_root(root)) {
         log_err("Refusing to operate on / on non-AdavaLinux. Use --root <path> or --allow-root.");
         return 1;
+    }
+
+    /* Keep the existing single-package transaction implementation, but make
+     * the CLI accept a package list.  Each child receives the same install
+     * options and handles its own dependency closure. */
+    if (strcmp(cmd, "install") == 0 && install_pkg_count > 1) {
+        int all_rc = 0;
+
+        for (size_t i = 0; i < install_pkg_count; i++) {
+            char *child_argv[10];
+            size_t n = 0;
+
+            child_argv[n++] = argv[0];
+            child_argv[n++] = "install";
+            child_argv[n++] = (char *)install_pkg_args[i];
+            child_argv[n++] = "--root";
+            child_argv[n++] = (char *)root;
+            if (allow_root) {
+                child_argv[n++] = "--allow-root";
+            }
+            if (local_only) {
+                child_argv[n++] = "-local";
+            }
+            if (assume_yes) {
+                child_argv[n++] = "-y";
+            }
+            child_argv[n] = NULL;
+            if (run_cmd(child_argv) != 0) {
+                all_rc = 1;
+            }
+        }
+        return all_rc;
     }
 
     if (is_list) {
@@ -2715,33 +2916,6 @@ int main(int argc, char *argv[]) {
         }
         log_ok("Done");
         return 0;
-    }
-
-    if (is_reinstall) {
-        if (reinstall_all == (reinstall_pkg_arg != NULL)) {
-            log_err("Use exactly one reinstall target: <name> or --all");
-            return 1;
-        }
-        if (reinstall_all) {
-            installed_pkg_t *installed = NULL;
-            size_t installed_count = 0;
-            if (collect_installed_update_packages(root, &installed, &installed_count) != 0) {
-                log_err("Failed to enumerate installed packages");
-                return 1;
-            }
-            int all_rc = 0;
-            for (size_t i = 0; i < installed_count; i++) {
-                char *child_argv[] = {
-                    argv[0], "reinstall", installed[i].installed_name,
-                    "--root", (char *)root, "--allow-root", "-y", NULL
-                };
-                if (run_cmd(child_argv) != 0) {
-                    all_rc = 1;
-                }
-            }
-            free(installed);
-            return all_rc;
-        }
     }
 
     if (is_update) {
@@ -2855,7 +3029,7 @@ int main(int argc, char *argv[]) {
         cmd = "install";
     }
 
-    const char *pkg_arg = is_update ? update_selector : (is_reinstall ? reinstall_pkg_arg : argv[2]);
+    const char *pkg_arg = is_update ? update_selector : argv[2];
 
     char pkg_name[PATH_MAX];
     if (get_pkg_base(pkg_arg, pkg_name, sizeof(pkg_name)) != 0) {
@@ -2877,7 +3051,30 @@ int main(int argc, char *argv[]) {
             return 0;
         }
         log_info("Removing package");
-        if (remove_pkg(root, pkg_name) != 0) {
+        if (!with_deps && remove_pkg(root, pkg_name) != 0) {
+            return 1;
+        }
+        if (with_deps) {
+            char remove_tmp_template[] = "/tmp/syspckg-remove-XXXXXX";
+            char *remove_tmpdir = mkdtemp(remove_tmp_template);
+            if (remove_tmpdir) {
+                snprintf(g_tmpdir, sizeof(g_tmpdir), "%s", remove_tmpdir);
+            }
+            if (!remove_tmpdir ||
+                remove_pkg_with_deps(root, pkg_name, remove_tmpdir, local_only, 0) != 0) {
+                if (remove_tmpdir) {
+                    char *rm_argv[] = { "rm", "-rf", remove_tmpdir, NULL };
+                    run_cmd(rm_argv);
+                }
+                g_tmpdir[0] = '\0';
+                return 1;
+            }
+            char *rm_argv[] = { "rm", "-rf", remove_tmpdir, NULL };
+            run_cmd(rm_argv);
+            g_tmpdir[0] = '\0';
+        }
+        if (refresh_dynamic_linker_cache(root) != 0) {
+            log_err("Failed to refresh dynamic linker cache");
             return 1;
         }
         log_ok("Removed");
@@ -2935,7 +3132,7 @@ int main(int argc, char *argv[]) {
         if (!strchr(selector, '/') &&
             !has_suffix(selector, ".syspckg") &&
             selector_has_explicit_version(selector) &&
-            !is_reinstall &&
+            !is_download &&
             is_pkg_installed(root, selector)) {
             continue;
         }
@@ -3031,7 +3228,7 @@ int main(int argc, char *argv[]) {
             goto install_cleanup;
         }
         plan.installed = is_pkg_installed(root, plan.install_name);
-        if (is_reinstall && is_root_request) {
+        if (is_update && with_deps) {
             plan.installed = 0;
         }
 
@@ -3043,11 +3240,9 @@ int main(int argc, char *argv[]) {
         plans = next;
         plans[plan_count++] = plan;
 
-        for (size_t i = 0; i < plan.dep_count; i++) {
+        int include_deps = !no_deps && (!is_update || with_deps);
+        for (size_t i = 0; include_deps && i < plan.dep_count; i++) {
             const char *dep = plan.deps[i];
-            char installed_dep[PATH_MAX];
-            int dep_installed;
-
             if (!is_safe_pkgname(dep)) {
                 continue;
             }
@@ -3056,18 +3251,6 @@ int main(int argc, char *argv[]) {
             }
             if (name_exists(queue, queue_count, dep)) {
                 continue;
-            }
-            if (is_reinstall) {
-                dep_installed = find_installed_package_for_update(root, dep,
-                                                                   installed_dep,
-                                                                   sizeof(installed_dep));
-                if (dep_installed < 0) {
-                    log_err("Failed to inspect installed dependency state");
-                    goto install_cleanup;
-                }
-                if (dep_installed > 0) {
-                    continue;
-                }
             }
             if (push_string(&queue, &queue_count, dep) != 0) {
                 log_err("Out of memory");
@@ -3083,6 +3266,19 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "%s%s", missing[i], (i + 1 < missing_count) ? ", " : "");
         }
         fprintf(stderr, "\n");
+        goto install_cleanup;
+    }
+
+    if (is_download) {
+        for (size_t i = 0; i < plan_count; i++) {
+            if (copy_archive_to_dir(plans[i].archive_path, download_output) != 0) {
+                log_err("Failed to save downloaded package archive");
+                goto install_cleanup;
+            }
+            printf("Downloaded %s to %s\n", plans[i].install_name, download_output);
+        }
+        log_ok("Download complete");
+        rc = 0;
         goto install_cleanup;
     }
 
@@ -3167,6 +3363,12 @@ int main(int argc, char *argv[]) {
             install_errors++;
             continue;
         }
+        if (save_remove_hook(p->install_dir, root, p->install_name) != 0) {
+            fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to save remove hook for: %s\n", p->install_name);
+            (void)remove_pkg_impl(root, p->install_name, 0);
+            install_errors++;
+            continue;
+        }
         if (run_package_hook(p->install_dir, root, "install") != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Install hook failed for: %s\n", p->install_name);
             (void)remove_pkg_impl(root, p->install_name, 0);
@@ -3177,6 +3379,11 @@ int main(int argc, char *argv[]) {
     }
     if (install_errors > 0) {
         log_err("Some packages failed to install");
+        goto install_cleanup;
+    }
+
+    if (refresh_dynamic_linker_cache(root) != 0) {
+        log_err("Failed to refresh dynamic linker cache");
         goto install_cleanup;
     }
 
