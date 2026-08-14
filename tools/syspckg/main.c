@@ -1174,6 +1174,74 @@ static ssize_t find_plan_by_selector(pkg_plan_t *plans, size_t count, const char
     return -1;
 }
 
+/* A dependency can be written either as the package base name ("glib") or
+ * as its exact install name ("glib-2.82.2"). */
+static ssize_t find_plan_by_dependency(pkg_plan_t *plans, size_t count, const char *dependency) {
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(plans[i].install_name, dependency) == 0 ||
+            strcmp(plans[i].pkg_name, dependency) == 0 ||
+            strcmp(plans[i].selector, dependency) == 0) {
+            return (ssize_t)i;
+        }
+    }
+    return -1;
+}
+
+static int append_plan_index(size_t **order, size_t *count, size_t index) {
+    size_t *next = realloc(*order, (*count + 1) * sizeof(**order));
+    if (!next) {
+        return -1;
+    }
+    *order = next;
+    (*order)[(*count)++] = index;
+    return 0;
+}
+
+static int visit_install_plan(pkg_plan_t *plans, size_t count, size_t index,
+                              unsigned char *state, size_t **order, size_t *order_count) {
+    if (state[index] == 2) {
+        return 0;
+    }
+    if (state[index] == 1) {
+        fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Circular package dependency involving: %s\n",
+                plans[index].install_name);
+        return -1;
+    }
+    state[index] = 1;
+    for (size_t i = 0; i < plans[index].dep_count; i++) {
+        ssize_t dep_index = find_plan_by_dependency(plans, count, plans[index].deps[i]);
+        if (dep_index >= 0 && visit_install_plan(plans, count, (size_t)dep_index,
+                                                 state, order, order_count) != 0) {
+            return -1;
+        }
+    }
+    state[index] = 2;
+    return append_plan_index(order, order_count, index);
+}
+
+/* Return a dependency-first order.  Queue order is only a download detail;
+ * it must never determine the order in which install hooks are run. */
+static int build_install_order(pkg_plan_t *plans, size_t count,
+                               size_t **out_order, size_t *out_count) {
+    unsigned char *state = calloc(count ? count : 1, sizeof(*state));
+    size_t *order = NULL;
+    size_t order_count = 0;
+    if (!state) {
+        return -1;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (visit_install_plan(plans, count, i, state, &order, &order_count) != 0) {
+            free(state);
+            free(order);
+            return -1;
+        }
+    }
+    free(state);
+    *out_order = order;
+    *out_count = order_count;
+    return 0;
+}
+
 static void free_plans(pkg_plan_t *plans, size_t count) {
     for (size_t i = 0; i < count; i++) {
         for (size_t j = 0; j < plans[i].dep_count; j++) {
@@ -3105,6 +3173,8 @@ int main(int argc, char *argv[]) {
     size_t queue_idx = 0;
     char **missing = NULL;
     size_t missing_count = 0;
+    size_t *install_order = NULL;
+    size_t install_order_count = 0;
     int rc = 1;
 
     char initial_selector[PATH_MAX];
@@ -3334,10 +3404,18 @@ int main(int argc, char *argv[]) {
     }
     log_ok("Extraction phase complete");
 
+    if (build_install_order(plans, plan_count, &install_order, &install_order_count) != 0) {
+        log_err("Failed to determine dependency installation order");
+        goto install_cleanup;
+    }
+
     log_info("Phase 3/3: Installing packages");
     int install_errors = 0;
-    for (size_t i = plan_count; i > 0; i--) {
-        pkg_plan_t *p = &plans[i - 1];
+    /* Stage every payload first.  A hook may execute a program supplied by a
+     * different package, so files and the dynamic linker cache must exist
+     * before any hook is allowed to run. */
+    for (size_t i = 0; i < install_order_count; i++) {
+        pkg_plan_t *p = &plans[install_order[i]];
         if (p->installed || !p->extracted) {
             continue;
         }
@@ -3349,24 +3427,44 @@ int main(int argc, char *argv[]) {
             remove_pkg_impl(root, p->installed_name, 0) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to remove old package version: %s\n",
                     p->installed_name);
+            p->extracted = 0;
             install_errors++;
             continue;
         }
         if (copy_tree(p->install_dir, "", root) != 0) {
             perror("copy_tree");
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to install package: %s\n", p->install_name);
+            p->extracted = 0;
             install_errors++;
             continue;
         }
         if (write_manifest(p->install_dir, root, p->install_name) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to write manifest for: %s\n", p->install_name);
+            p->extracted = 0;
             install_errors++;
             continue;
         }
         if (save_remove_hook(p->install_dir, root, p->install_name) != 0) {
             fprintf(stderr, COLOR_RED "ERR: " COLOR_RESET "Failed to save remove hook for: %s\n", p->install_name);
             (void)remove_pkg_impl(root, p->install_name, 0);
+            p->extracted = 0;
             install_errors++;
+            continue;
+        }
+    }
+    if (install_errors > 0) {
+        log_err("Some packages failed to install");
+        goto install_cleanup;
+    }
+
+    if (refresh_dynamic_linker_cache(root) != 0) {
+        log_err("Failed to refresh dynamic linker cache");
+        goto install_cleanup;
+    }
+
+    for (size_t i = 0; i < install_order_count; i++) {
+        pkg_plan_t *p = &plans[install_order[i]];
+        if (p->installed || !p->extracted) {
             continue;
         }
         if (run_package_hook(p->install_dir, root, "install") != 0) {
@@ -3398,6 +3496,7 @@ int main(int argc, char *argv[]) {
 install_cleanup:
     free_strings(queue, queue_count);
     free_strings(missing, missing_count);
+    free(install_order);
     free_plans(plans, plan_count);
     return rc;
 }
