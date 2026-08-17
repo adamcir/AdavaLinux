@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ROOT_MNT "/mnt/root"
@@ -444,6 +445,7 @@ static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, v
     char root_hash[256];
     char path[256];
     char content[1024];
+    long password_change_day = (long)(time(NULL) / 86400);
     char *const chmod_passwd[] = { "chmod", "644", ROOT_MNT "/etc/passwd", ROOT_MNT "/etc/group", NULL };
     char *const chmod_shadow[] = { "chmod", "600", ROOT_MNT "/etc/shadow", NULL };
 
@@ -479,9 +481,9 @@ static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, v
         return -1;
     }
     snprintf(content, sizeof(content),
-             "root:%s:0:0:99999:7:::\n"
-             "%s:%s:0:0:99999:7:::\n",
-             root_hash, cfg->username, user_hash);
+             "root:%s:%ld:0:99999:7:::\n"
+             "%s:%s:%ld:0:99999:7:::\n",
+             root_hash, password_change_day, cfg->username, user_hash, password_change_day);
     if (installer_write_file(ROOT_MNT "/etc/shadow", content) != 0) {
         return -1;
     }

@@ -1,6 +1,8 @@
 #!/bin/sh
 
 [ -f /etc/hostname ] && hostname -F /etc/hostname 2>/dev/null || true
+# Keep agetty's prompt on the same line as the expanded hostname and TTY.
+printf '\n \l ' > /etc/issue
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 if [ -x /usr/bin/dbus-daemon ]; then

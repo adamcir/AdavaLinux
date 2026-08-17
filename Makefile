@@ -28,6 +28,8 @@ SYSPCKG_SYSROOT ?=
 SYSPCKG_PACKAGE_DIR ?= $(PROJECT_DIR)/../syspckg/packages
 GRUB_I386_PC_DIR ?=
 GRUB_X86_64_EFI_DIR ?=
+MEMTEST_BIOS_IMAGE ?= /boot/mt86+ia32
+MEMTEST_UEFI_IMAGE ?= /boot/mt86+x64
 
 HOST_UNAME := $(shell uname -m 2>/dev/null || echo unknown)
 HOST_ARCH := $(HOST_UNAME)
@@ -110,6 +112,8 @@ SYSPCKG_PACKAGE_DIR="$(SYSPCKG_PACKAGE_DIR)"
 QEMU_UEFI_VIDEO="$(QEMU_UEFI_VIDEO)"
 GRUB_I386_PC_DIR="$(GRUB_I386_PC_DIR)"
 GRUB_X86_64_EFI_DIR="$(GRUB_X86_64_EFI_DIR)"
+MEMTEST_BIOS_IMAGE="$(MEMTEST_BIOS_IMAGE)"
+MEMTEST_UEFI_IMAGE="$(MEMTEST_UEFI_IMAGE)"
 say() { printf "\n==> %s\n" "$$*"; }
 die() { printf "\nERROR: %s\n" "$$*" >&2; exit 1; }
 need_cmd() { command -v "$$1" >/dev/null 2>&1 || die "Missing command: $$1"; }
@@ -503,13 +507,17 @@ iso:
 	cp -f "$$OUT_DIR/$$OUT_KERNEL_NAME" "$$ISO_DIR/boot/$$OUT_KERNEL_NAME"
 	cp -f "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_INSTALLER_INITRAMFS_NAME"
 	cp -f "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_DISK_INITRAMFS_NAME"
+	[ -f "$$MEMTEST_BIOS_IMAGE" ] || die "Missing Memtest86+ BIOS image: $$MEMTEST_BIOS_IMAGE"
+	[ -f "$$MEMTEST_UEFI_IMAGE" ] || die "Missing Memtest86+ UEFI image: $$MEMTEST_UEFI_IMAGE"
+	cp -f "$$MEMTEST_BIOS_IMAGE" "$$ISO_DIR/boot/memtest86+.bin"
+	cp -f "$$MEMTEST_UEFI_IMAGE" "$$ISO_DIR/boot/memtest86+x64.efi"
 	GRUB_CFG_TEMPLATE="$$FILESFORLINUX_ISO_DIR/boot/grub/grub.cfg"
 	[ -f "$$GRUB_CFG_TEMPLATE" ] || die "Missing GRUB configuration: $$GRUB_CFG_TEMPLATE"
 	cp -f "$$GRUB_CFG_TEMPLATE" "$$ISO_DIR/boot/grub/grub.cfg"
 	sed -i "s|__KERNEL_IMAGE__|$$OUT_KERNEL_NAME|g" "$$ISO_DIR/boot/grub/grub.cfg"
 	ensure_grub_i386_pc_modules
 	ensure_grub_x86_64_efi_modules
-	if ! grub-mkimage -d "$$GRUB_I386_PC_DIR" -O i386-pc -p /boot/grub -o "$$OUT_DIR/grub-core-bios.img" biosdisk iso9660 >/dev/null 2>&1; then
+	if ! grub-mkimage -d "$$GRUB_I386_PC_DIR" -O i386-pc -p /boot/grub -o "$$OUT_DIR/grub-core-bios.img" biosdisk iso9660 linux16 >/dev/null 2>&1; then
 	  die "Missing GRUB BIOS i386-pc modules. The ISO will not boot in SeaBIOS. Install grub i386-pc modules."
 	fi
 	if ! grub-mkimage -d "$$GRUB_X86_64_EFI_DIR" -O x86_64-efi -p /boot/grub -o "$$OUT_DIR/grub-core-uefi.efi" iso9660 normal configfile >/dev/null 2>&1; then
@@ -518,7 +526,9 @@ iso:
 	rm -f "$$OUT_DIR/grub-core-bios.img" "$$OUT_DIR/grub-core-uefi.efi"
 	grub-mkrescue --directory="$$GRUB_I386_PC_DIR" -o "$$ISO_OUT_BIOS" "$$ISO_DIR" >/dev/null
 	say "ISO created: $$ISO_OUT_BIOS"
-	grub-mkrescue --directory="$$GRUB_X86_64_EFI_DIR" -o "$$ISO_OUT_UEFI" "$$ISO_DIR" >/dev/null
+	grub-mkrescue --directory="$$GRUB_X86_64_EFI_DIR" \
+	  --modules="efi_gop video all_video gfxterm font" \
+	  -o "$$ISO_OUT_UEFI" "$$ISO_DIR" >/dev/null
 	say "ISO created: $$ISO_OUT_UEFI"
 
 run-bios:
