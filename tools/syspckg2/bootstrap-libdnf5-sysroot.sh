@@ -23,9 +23,29 @@ need() {
 need apt-get
 need dpkg-deb
 
-if [ -f "$OUT/usr/include/libdnf5/base/base.hpp" ] &&
-   { [ -e "$OUT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] ||
-     [ -e "$OUT/usr/lib/x86_64-linux-gnu/libdnf5.so.2" ]; }; then
+runtime_lib_present() {
+    pattern="$1"
+    find "$OUT/lib/x86_64-linux-gnu" "$OUT/usr/lib/x86_64-linux-gnu" \
+        -maxdepth 1 \( -type f -o -type l \) -name "$pattern" -print -quit 2>/dev/null |
+        grep -q .
+}
+
+sysroot_complete() {
+    [ -f "$OUT/usr/include/libdnf5/base/base.hpp" ] || return 1
+    runtime_lib_present 'libdnf5.so*' || return 1
+    runtime_lib_present 'libc.so.6' || return 1
+    runtime_lib_present 'libstdc++.so.6' || return 1
+    runtime_lib_present 'libjson-c.so.*' || return 1
+    runtime_lib_present 'libsolvext.so.*' || return 1
+    runtime_lib_present 'libxml2.so.*' || return 1
+    runtime_lib_present 'liblua*.so.*' || return 1
+    runtime_lib_present 'libyaml*.so.*' || return 1
+    runtime_lib_present 'librpm_sequoia.so.*' || return 1
+    runtime_lib_present 'libcurl*.so.*' || return 1
+    runtime_lib_present 'libgpgme.so.*' || return 1
+}
+
+if sysroot_complete; then
     exit 0
 fi
 
@@ -73,9 +93,8 @@ if [ ! -f "$OUT/usr/include/libdnf5/base/base.hpp" ]; then
     exit 1
 fi
 
-if [ ! -e "$OUT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] &&
-   [ ! -e "$OUT/usr/lib/x86_64-linux-gnu/libdnf5.so.2" ]; then
-    echo "ERR: libdnf5 runtime library was not extracted" >&2
+if ! sysroot_complete; then
+    echo "ERR: libdnf5 sysroot is incomplete after dependency extraction" >&2
     exit 1
 fi
 
