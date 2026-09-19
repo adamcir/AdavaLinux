@@ -189,7 +189,18 @@ void apply_repo_selection(libdnf5::Base & base, SourceMode source) {
     }
 }
 
+void check_runtime_layout() {
+    if (!std::filesystem::exists("/usr/lib/rpm/rpmrc")) {
+        throw std::runtime_error("RPM configuration is missing: /usr/lib/rpm/rpmrc");
+    }
+    if (!std::filesystem::exists("/usr/lib/rpm/macros")) {
+        throw std::runtime_error("RPM macros are missing: /usr/lib/rpm/macros");
+    }
+}
+
 void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool load_repositories = true) {
+    check_runtime_layout();
+
     auto & config = base.get_config();
     config.get_plugins_option().set(false);
     config.get_installroot_option().set("/");
@@ -351,9 +362,9 @@ int command_upgrade(libdnf5::Base & base, const Options & opts) {
 }
 
 void print_package_line(const libdnf5::rpm::Package & pkg) {
-    std::cout << pkg.get_name() << "." << pkg.get_arch()
+    std::cout << COLOR_GREEN << pkg.get_name() << COLOR_RESET << "." << pkg.get_arch()
               << "\t" << pkg.get_version() << "-" << pkg.get_release()
-              << "\t" << pkg.get_repo_id();
+              << "\t" << COLOR_YELLOW << pkg.get_repo_id() << COLOR_RESET;
     const auto summary = pkg.get_summary();
     if (!summary.empty()) {
         std::cout << "\t" << summary;
@@ -410,10 +421,10 @@ int command_info(libdnf5::Base & base, const Options & opts) {
 
         for (const auto & pkg : query) {
             found = true;
-            std::cout << "Name:        " << pkg.get_name() << "\n"
-                      << "Version:     " << pkg.get_version() << "-" << pkg.get_release() << "\n"
-                      << "Architecture:" << " " << pkg.get_arch() << "\n"
-                      << "Repository:  " << pkg.get_repo_id() << "\n"
+            std::cout << COLOR_GREEN << "Name:        " << COLOR_RESET << pkg.get_name() << "\n"
+                      << COLOR_GREEN << "Version:     " << COLOR_RESET << pkg.get_version() << "-" << pkg.get_release() << "\n"
+                      << COLOR_GREEN << "Architecture:" << COLOR_RESET << " " << pkg.get_arch() << "\n"
+                      << COLOR_GREEN << "Repository:  " << COLOR_RESET << COLOR_YELLOW << pkg.get_repo_id() << COLOR_RESET << "\n"
                       << "License:     " << pkg.get_license() << "\n"
                       << "Summary:     " << pkg.get_summary() << "\n"
                       << "Description: " << pkg.get_description() << "\n\n";
@@ -443,8 +454,10 @@ int command_repos(libdnf5::Base & base) {
         if (repo->get_type() == libdnf5::repo::Repo::Type::SYSTEM) {
             continue;
         }
-        std::cout << repo->get_id() << "\t"
-                  << (repo->is_enabled() ? "enabled" : "disabled") << "\t"
+        std::cout << COLOR_GREEN << repo->get_id() << COLOR_RESET << "\t"
+                  << (repo->is_enabled() ? COLOR_GREEN : COLOR_RED)
+                  << (repo->is_enabled() ? "enabled" : "disabled")
+                  << COLOR_RESET << "\t"
                   << repo->get_config().get_name_option().get_value() << "\n";
     }
     return 0;
