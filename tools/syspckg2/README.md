@@ -69,3 +69,20 @@ SystemPackager 2 marks enabled repositories as skip-if-unavailable while loading
 If one repository cannot be fetched, it prints a warning and continues with the
 remaining repositories. If none of the enabled repositories can provide package
 metadata, the command fails.
+
+
+## Fetch diagnostics
+
+SystemPackager 2 installs libdnf5 download callbacks for both repository metadata
+and RPM package downloads. The terminal output includes:
+
+- repository source URLs (baseurl, mirrorlist or metalink),
+- the start and completion of each fetch,
+- download size and progress in 10% steps,
+- cache hits,
+- failed mirror URL and metadata type,
+- the exact libcurl/librepo error returned for failed transfers,
+- a per-repository ready/failed summary.
+
+A failed mirror is a warning and libdnf5 may continue with another mirror. A failed
+repository does not abort loading while another enabled repository remains usable.
