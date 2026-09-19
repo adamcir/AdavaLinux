@@ -68,7 +68,6 @@ void banner() {
 void usage(const char * prog) {
     std::cerr
         << COLOR_YELLOW << "Usage:" << COLOR_RESET << "\n"
-        << "  " << prog << " <package>... [--source auto|adava|fedora] [-y]\n"
         << "  " << prog << " install <package>... [--source auto|adava|fedora] [-y]\n"
         << "  " << prog << " remove <package>... [-y]\n"
         << "  " << prog << " update [package]... [--source auto|adava|fedora] [-y]\n"
@@ -127,17 +126,18 @@ Options parse_options(int argc, char ** argv) {
     }
 
     if (positional.empty()) {
-        throw std::runtime_error("No command or package specified");
+        throw std::runtime_error("No command specified");
     }
 
-    if (is_command(positional.front())) {
-        opts.command = positional.front();
-        opts.args.assign(positional.begin() + 1, positional.end());
-    } else {
-        opts.command = "install";
-        opts.args = std::move(positional);
+    if (!is_command(positional.front())) {
+        throw std::runtime_error(
+            "Unknown command '" + positional.front() +
+            "'. Package names must follow an explicit command, for example: syspckg2 install " +
+            positional.front());
     }
 
+    opts.command = positional.front();
+    opts.args.assign(positional.begin() + 1, positional.end());
     return opts;
 }
 
@@ -218,12 +218,55 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         return;
     }
 
+    std::vector<std::string> enabled_repo_ids;
+    {
+        libdnf5::repo::RepoQuery repos(base);
+        for (auto repo : repos) {
+            if (repo->get_type() != libdnf5::repo::Repo::Type::AVAILABLE || !repo->is_enabled()) {
+                continue;
+            }
+
+            enabled_repo_ids.push_back(repo->get_id());
+
+            // A broken mirror/repository must not abort the whole operation.
+            // We check the result after load_repos() and only fail if none
+            // of the enabled repositories were usable.
+            repo->get_config().get_skip_if_unavailable_option().set(true);
+        }
+    }
+
+    if (enabled_repo_ids.empty()) {
+        throw std::runtime_error("No enabled package repositories");
+    }
+
     base.lock_system_repo(
         write_lock ? libdnf5::utils::LockAccess::WRITE : libdnf5::utils::LockAccess::READ,
         libdnf5::utils::LockBlocking::BLOCKING);
+
     log_info("Loading repositories...");
     repo_sack->load_repos();
-    log_ok("Repositories loaded");
+
+    std::size_t usable_repositories = 0;
+    for (const auto & repo_id : enabled_repo_ids) {
+        libdnf5::rpm::PackageQuery repo_packages(base);
+        repo_packages.filter_available();
+        repo_packages.filter_repo_id(repo_id);
+
+        if (repo_packages.empty()) {
+            log_warn("Unable to fetch repository '" + repo_id + "'; continuing with remaining repositories");
+        } else {
+            ++usable_repositories;
+            log_ok("Repository ready: " + repo_id);
+        }
+    }
+
+    if (usable_repositories == 0) {
+        throw std::runtime_error("Unable to fetch any enabled package repository");
+    }
+
+    log_ok(
+        "Repositories loaded (" + std::to_string(usable_repositories) + "/" +
+        std::to_string(enabled_repo_ids.size()) + ")");
 }
 
 bool confirm_transaction(bool assume_yes) {
@@ -481,6 +524,11 @@ int command_clean(libdnf5::Base & base) {
 
 int main(int argc, char ** argv) {
     banner();
+
+    if (argc == 1) {
+        usage(argv[0]);
+        return 0;
+    }
 
     if (argc >= 2) {
         const std::string first{argv[1]};
