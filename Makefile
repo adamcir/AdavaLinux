@@ -125,6 +125,9 @@ require_source_dirs() {
   [ -d "$$KERNEL_DIR" ] || die "Directory not found: $$KERNEL_DIR"
   [ -d "$$BUSYBOX_DIR" ] || die "Directory not found: $$BUSYBOX_DIR"
 }
+require_busybox_dir() {
+  [ -d "$$BUSYBOX_DIR" ] || die "Directory not found: $$BUSYBOX_DIR"
+}
 check_toolchain() {
   if [ -n "$$CROSS_COMPILE" ]; then
     need_cmd "$${CROSS_COMPILE}gcc"
@@ -453,7 +456,7 @@ busybox:
 
 iso:
 	$(COMMON_SH)
-	require_source_dirs
+	require_busybox_dir
 	need_cmd make
 	need_cmd cpio
 	need_cmd gzip
