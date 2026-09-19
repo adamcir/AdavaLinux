@@ -279,11 +279,11 @@ ensure_syspckg2_sysroot() {
 
   need_cmd apt-get
   need_cmd dpkg-deb
-  [ -f "$SYSPCKG2_BOOTSTRAP" ] || die "Missing libdnf5 bootstrap script: $SYSPCKG2_BOOTSTRAP"
+  [ -f "$$SYSPCKG2_BOOTSTRAP" ] || die "Missing libdnf5 bootstrap script: $$SYSPCKG2_BOOTSTRAP"
 
-  SYSPCKG2_SYSROOT="$TOOLCACHE_DIR/libdnf5-amd64"
+  SYSPCKG2_SYSROOT="$$TOOLCACHE_DIR/libdnf5-amd64"
   say "Preparing isolated Debian forky amd64 libdnf5 sysroot"
-  sh "$SYSPCKG2_BOOTSTRAP" "$SYSPCKG2_SYSROOT" amd64
+  sh "$$SYSPCKG2_BOOTSTRAP" "$$SYSPCKG2_SYSROOT" amd64
 }
 copy_syspckg2_runtime_from_sysroot() {
   ensure_syspckg2_sysroot
