@@ -1,53 +1,61 @@
 # SystemPackager 2
 
-SystemPackager 2 is the RPM/DNF5 generation of the AdavaLinux package manager.
+SystemPackager 2 is the RPM/libdnf5 generation of the AdavaLinux package manager.
 
 The original `tools/syspckg` remains available for legacy `.syspckg`
-packages. New packages are expected to use RPM and are handled through
-`syspckg2`.
+packages. New packages use RPM and are handled by `syspckg2`.
+
+## Architecture
+
+`syspckg2` is a native C++ frontend that links directly to **libdnf5**.
+It does **not** execute the external `dnf5` command.
+
+```text
+SystemPackager 2
+      |
+      +-- libdnf5
+            |
+            +-- RPM
+            +-- libsolv
+            +-- librepo
+            +-- Fedora repositories
+            +-- AdavaLinux repository
+```
 
 ## Sources
 
-SystemPackager 2 uses two RPM sources:
+- **AdavaLinux** — AdavaLinux-specific and Adava Software RPM packages.
+- **Fedora 44** — upstream RPM packages and dependencies.
 
-- **AdavaLinux** — AdavaLinux-specific and Adava Software packages.
-- **Fedora 44** — upstream RPM packages such as Xfce, GTK, GCC, GIMP and
-  their dependencies.
-
-The AdavaLinux repository has a lower numeric DNF priority and therefore wins
-when the same package is available from both sources.
+AdavaLinux has the higher repository priority when both repositories provide
+the same package.
 
 ## Usage
 
 ```sh
 syspckg2 xfce4
-syspckg2 install gimp
+syspckg2 install mc
 syspckg2 install adaterm --adava
 syspckg2 install xfce4 --fedora
+syspckg2 remove mc
+syspckg2 update
 syspckg2 search terminal
 syspckg2 info xfce4
-syspckg2 update
+syspckg2 list installed
 syspckg2 repos
 ```
 
 `syspckg2 <package>` is a shortcut for `syspckg2 install <package>`.
 
-## Backend
+## Build
 
-This first transition version uses DNF5 as the RPM transaction engine. It does
-not use the legacy SystemPackager database or `.syspckg` format.
+The top-level AdavaLinux Makefile prepares an amd64 libdnf5 sysroot under
+`.toolcache/libdnf5-amd64`. On arm64 build hosts it is then cross-linked with
+`x86_64-linux-gnu-g++`.
 
-The frontend deliberately has its own AdavaLinux CLI and repository policy.
-A later revision can switch the implementation from executing `dnf5` to
-calling `libdnf5` directly without changing the command-line interface.
+The sysroot is populated from Ubuntu 26.04's amd64 libdnf5 packages only as a
+build/runtime source for the libdnf5 engine. Package repositories used by
+AdavaLinux itself remain AdavaLinux and Fedora.
 
-Set `SYSPCKG2_BACKEND` to override the backend executable during development
-or tests.
-
-## Repository configuration
-
-Vendor repository files are installed under
-`/usr/share/dnf5/repos.d/`.
-
-Fedora is pinned to Fedora 44 for the AdavaLinux 2 transition instead of using
-AdavaLinux's own VERSION value as DNF's `$releasever`.
+The ISO build copies the required shared libraries and RPM runtime data into
+the AdavaLinux rootfs. No `/usr/bin/dnf5` executable is required.
