@@ -43,6 +43,8 @@ sysroot_complete() {
     runtime_lib_present 'librpm_sequoia.so.*' || return 1
     runtime_lib_present 'libcurl*.so.*' || return 1
     runtime_lib_present 'libgpgme.so.*' || return 1
+    [ -f "$OUT/usr/lib/rpm/rpmrc" ] || return 1
+    [ -f "$OUT/usr/lib/rpm/macros" ] || return 1
 }
 
 if sysroot_complete; then
