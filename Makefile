@@ -226,33 +226,33 @@ ensure_amd64_ncurses() {
     return 0
   fi
 
-  NCURSES_SYSROOT="$TOOLCACHE_DIR/ncurses-amd64"
-  NCURSES_LIBDIR="$NCURSES_SYSROOT/usr/lib/x86_64-linux-gnu"
+  NCURSES_SYSROOT="$$TOOLCACHE_DIR/ncurses-amd64"
+  NCURSES_LIBDIR="$$NCURSES_SYSROOT/usr/lib/x86_64-linux-gnu"
 
-  if [ ! -f "$NCURSES_LIBDIR/libncurses.a" ] || \
-     [ ! -f "$NCURSES_LIBDIR/libtinfo.a" ]; then
+  if [ ! -f "$$NCURSES_LIBDIR/libncurses.a" ] || \
+     [ ! -f "$$NCURSES_LIBDIR/libtinfo.a" ]; then
     need_cmd apt
     need_cmd dpkg-deb
     ensure_amd64_arch_enabled
     say "Bootstrapping amd64 static ncurses libraries for installer"
-    mkdir -p "$NCURSES_SYSROOT" "$TOOLCACHE_DIR/downloads"
-    rm -rf "$NCURSES_SYSROOT"/*
+    mkdir -p "$$NCURSES_SYSROOT" "$$TOOLCACHE_DIR/downloads"
+    rm -rf "$$NCURSES_SYSROOT"/*
     (
-      cd "$TOOLCACHE_DIR/downloads"
+      cd "$$TOOLCACHE_DIR/downloads"
       rm -f libncurses-dev_*_amd64.deb
       apt download libncurses-dev:amd64
       for pkg in libncurses-dev_*_amd64.deb; do
-        [ -f "$pkg" ] || die "Failed to download libncurses-dev:amd64"
-        dpkg-deb -x "$pkg" "$NCURSES_SYSROOT"
+        [ -f "$$pkg" ] || die "Failed to download libncurses-dev:amd64"
+        dpkg-deb -x "$$pkg" "$$NCURSES_SYSROOT"
       done
     )
   fi
 
-  [ -f "$NCURSES_LIBDIR/libncurses.a" ] || die "amd64 libncurses.a not found"
-  [ -f "$NCURSES_LIBDIR/libtinfo.a" ] || die "amd64 libtinfo.a not found"
+  [ -f "$$NCURSES_LIBDIR/libncurses.a" ] || die "amd64 libncurses.a not found"
+  [ -f "$$NCURSES_LIBDIR/libtinfo.a" ] || die "amd64 libtinfo.a not found"
 
-  NCURSES_CPPFLAGS="-I$NCURSES_SYSROOT/usr/include"
-  NCURSES_LDLIBS="$NCURSES_LIBDIR/libncurses.a $NCURSES_LIBDIR/libtinfo.a"
+  NCURSES_CPPFLAGS="-I$$NCURSES_SYSROOT/usr/include"
+  NCURSES_LDLIBS="$$NCURSES_LIBDIR/libncurses.a $$NCURSES_LIBDIR/libtinfo.a"
 }
 ensure_amd64_sysroot() {
   if [ -n "$$SYSPCKG_SYSROOT" ]; then
@@ -348,15 +348,15 @@ tools:
 	mkdir -p "$$OUT_DIR" "$$TOOLCACHE_DIR"
 	if [ -d "$$INSTALLER_SRC_DIR" ]; then
 	  say "Building ncurses installer frontend"
-	  if [ -n "$CROSS_COMPILE" ]; then
+	  if [ -n "$$CROSS_COMPILE" ]; then
 	    ensure_amd64_ncurses
-	    make -C "$INSTALLER_SRC_DIR" clean all \
-	      CC="${CROSS_COMPILE}gcc" \
-	      CPPFLAGS="$NCURSES_CPPFLAGS" \
-	      LDFLAGS="$NCURSES_LDFLAGS" \
-	      LDLIBS="$NCURSES_LDLIBS"
+	    make -C "$$INSTALLER_SRC_DIR" clean all \
+	      CC="$${CROSS_COMPILE}gcc" \
+	      CPPFLAGS="$$NCURSES_CPPFLAGS" \
+	      LDFLAGS="$$NCURSES_LDFLAGS" \
+	      LDLIBS="$$NCURSES_LDLIBS"
 	  else
-	    make -C "$INSTALLER_SRC_DIR" clean all
+	    make -C "$$INSTALLER_SRC_DIR" clean all
 	  fi
 	  mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
 	  cp -f "$$INSTALLER_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/installer"
@@ -373,19 +373,18 @@ tools:
 	fi
 	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
 	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
-	cp -f "$SYSPCKG_BIN" "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
-	chmod +x "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
-	[ -d "$SYSPCKG2_SRC_DIR" ] || die "tools/syspckg2 not found"
+	cp -f "$$SYSPCKG_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	[ -d "$$SYSPCKG2_SRC_DIR" ] || die "tools/syspckg2 not found"
 	say "Building SystemPackager 2 (RPM/DNF5 frontend)"
-	if [ -n "$CROSS_COMPILE" ]; then
-	  make -C "$SYSPCKG2_SRC_DIR" clean all CC="${CROSS_COMPILE}gcc"
+	if [ -n "$$CROSS_COMPILE" ]; then
+	  make -C "$$SYSPCKG2_SRC_DIR" clean all CC="$${CROSS_COMPILE}gcc"
 	else
-	  make -C "$SYSPCKG2_SRC_DIR" clean all
+	  make -C "$$SYSPCKG2_SRC_DIR" clean all
 	fi
-	[ -x "$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $SYSPCKG2_BIN"
-	cp -f "$SYSPCKG2_BIN" "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
-	chmod +x "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
-
+	[ -x "$$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $$SYSPCKG2_BIN"
+	cp -f "$$SYSPCKG2_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
+	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
 kernel:
 	$(COMMON_SH)
 	require_source_dirs
