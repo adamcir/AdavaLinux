@@ -53,9 +53,11 @@ The top-level AdavaLinux Makefile prepares an amd64 libdnf5 sysroot under
 `.toolcache/libdnf5-amd64`. On arm64 build hosts it is then cross-linked with
 `x86_64-linux-gnu-g++`.
 
-The sysroot is populated from Ubuntu 26.04's amd64 libdnf5 packages only as a
-build/runtime source for the libdnf5 engine. Package repositories used by
-AdavaLinux itself remain AdavaLinux and Fedora.
+The sysroot is populated from an isolated Debian forky amd64 repository because
+older Debian/Raspberry Pi OS releases do not provide libdnf5-dev. The temporary
+APT state lives entirely inside `.toolcache`; no Debian testing repository is
+added to the host system. Package repositories used by AdavaLinux itself remain
+AdavaLinux and Fedora.
 
 The ISO build copies the required shared libraries and RPM runtime data into
 the AdavaLinux rootfs. No `/usr/bin/dnf5` executable is required.
