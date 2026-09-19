@@ -19,6 +19,8 @@ INSTALLER_SRC_DIR := $(PROJECT_DIR)/tools/installer
 INSTALLER_BIN := $(INSTALLER_SRC_DIR)/installer
 SYSPCKG_SRC_DIR := $(PROJECT_DIR)/tools/syspckg
 SYSPCKG_BIN := $(SYSPCKG_SRC_DIR)/syspckg
+SYSPCKG2_SRC_DIR := $(PROJECT_DIR)/tools/syspckg2
+SYSPCKG2_BIN := $(SYSPCKG2_SRC_DIR)/syspckg2
 
 TARGET_ARCH ?= x86_64
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
@@ -91,6 +93,8 @@ INSTALLER_SRC_DIR="$(INSTALLER_SRC_DIR)"
 INSTALLER_BIN="$(INSTALLER_BIN)"
 SYSPCKG_SRC_DIR="$(SYSPCKG_SRC_DIR)"
 SYSPCKG_BIN="$(SYSPCKG_BIN)"
+SYSPCKG2_SRC_DIR="$(SYSPCKG2_SRC_DIR)"
+SYSPCKG2_BIN="$(SYSPCKG2_BIN)"
 JOBS="$(JOBS)"
 TARGET_ARCH="$(TARGET_ARCH)"
 CROSS_COMPILE="$(CROSS_COMPILE)"
@@ -326,8 +330,18 @@ tools:
 	fi
 	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
 	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
-	cp -f "$$SYSPCKG_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
-	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	cp -f "$SYSPCKG_BIN" "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	chmod +x "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	[ -d "$SYSPCKG2_SRC_DIR" ] || die "tools/syspckg2 not found"
+	say "Building SystemPackager 2 (RPM/DNF5 frontend)"
+	if [ -n "$CROSS_COMPILE" ]; then
+	  make -C "$SYSPCKG2_SRC_DIR" clean all CC="${CROSS_COMPILE}gcc"
+	else
+	  make -C "$SYSPCKG2_SRC_DIR" clean all
+	fi
+	[ -x "$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $SYSPCKG2_BIN"
+	cp -f "$SYSPCKG2_BIN" "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
+	chmod +x "$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
 
 kernel:
 	$(COMMON_SH)
@@ -459,9 +473,19 @@ iso:
 	  *) die "syspckg is not an x86_64 binary: $$SYSPCKG_INFO" ;;
 	esac
 	mkdir -p "$$ROOTFS_DIR/usr/bin"
-	cp -a "$$SYSPCKG_BIN" "$$ROOTFS_DIR/usr/bin/syspckg"
-	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
-	say "Copying runtime loader + required shared libraries for syspckg into rootfs"
+	cp -a "$SYSPCKG_BIN" "$ROOTFS_DIR/usr/bin/syspckg"
+	ln -sf /usr/bin/syspckg "$ROOTFS_DIR/bin/syspckg"
+	say "Installing SystemPackager 2 into rootfs"
+	SYSPCKG2_BIN="$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
+	[ -x "$SYSPCKG2_BIN" ] || die "Executable syspckg2 not found: $SYSPCKG2_BIN"
+	SYSPCKG2_INFO="$(file -b "$SYSPCKG2_BIN" 2>/dev/null || true)"
+	case "$SYSPCKG2_INFO" in
+	  *"$SYSPCKG_MATCH"*) ;;
+	  *) die "syspckg2 is not an x86_64 binary: $SYSPCKG2_INFO" ;;
+	esac
+	cp -a "$SYSPCKG2_BIN" "$ROOTFS_DIR/usr/bin/syspckg2"
+	ln -sf /usr/bin/syspckg2 "$ROOTFS_DIR/bin/syspckg2"
+	say "Copying runtime loader + required shared libraries for syspckg/syspckg2 into rootfs"
 	if [ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then
 	  copy_one_lib "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
 	  ln -sf ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$$ROOTFS_DIR/lib64/ld-linux-x86-64.so.2"
@@ -482,7 +506,8 @@ iso:
 	  fi
 	fi
 	if [ "$$HOST_ARCH" = "x86_64" ]; then
-	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg"
+	  copy_deps_for_binary "$ROOTFS_DIR/usr/bin/syspckg"
+	  copy_deps_for_binary "$ROOTFS_DIR/usr/bin/syspckg2"
 	else
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
