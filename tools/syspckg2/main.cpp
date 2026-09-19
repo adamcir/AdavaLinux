@@ -4,6 +4,7 @@
 #include <libdnf5/base/transaction_package.hpp>
 #include <libdnf5/common/sack/query_cmp.hpp>
 #include <libdnf5/repo/download_callbacks.hpp>
+#include <libdnf5/repo/package_downloader.hpp>
 #include <libdnf5/repo/repo_query.hpp>
 #include <libdnf5/repo/repo_sack.hpp>
 #include <libdnf5/rpm/package_query.hpp>
@@ -35,6 +36,11 @@ constexpr const char * COLOR_YELLOW = "\033[33m";
 constexpr const char * COLOR_GREEN = "\033[32m";
 constexpr const char * COLOR_CYAN = "\033[36m";
 constexpr const char * COLOR_RESET = "\033[0m";
+
+constexpr int NETWORK_TIMEOUT_SECONDS = 5;
+constexpr int MAX_MIRROR_TRIES = 3;
+constexpr std::uint32_t MAX_PARALLEL_DOWNLOADS = 8;
+constexpr std::uint32_t MAX_DOWNLOADS_PER_MIRROR = 4;
 
 void log_err(const std::string & message) {
     std::cerr << COLOR_RED << "ERR: " << COLOR_RESET << message << "\n";
@@ -116,7 +122,7 @@ private:
         percent = std::clamp(percent, 0, 100);
         const int bucket = (percent / 10) * 10;
 
-        if (bucket >= state->last_bucket + 10 || percent == 100) {
+        if (bucket >= state->last_bucket + 10) {
             state->last_bucket = bucket;
             log_info(
                 "Fetch progress: " + state->description + " " +
@@ -349,6 +355,17 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
     auto & config = base.get_config();
     config.get_plugins_option().set(false);
     config.get_installroot_option().set("/");
+    config.get_timeout_option().set(libdnf5::Option::Priority::RUNTIME, NETWORK_TIMEOUT_SECONDS);
+    config.get_max_parallel_downloads_option().set(
+        libdnf5::Option::Priority::RUNTIME, MAX_PARALLEL_DOWNLOADS);
+    config.get_max_downloads_per_mirror_option().set(
+        libdnf5::Option::Priority::RUNTIME, MAX_DOWNLOADS_PER_MIRROR);
+
+    log_info(
+        "Network policy: timeout " + std::to_string(NETWORK_TIMEOUT_SECONDS) +
+        "s, max " + std::to_string(MAX_MIRROR_TRIES) +
+        " mirror tries, " + std::to_string(MAX_PARALLEL_DOWNLOADS) +
+        " parallel downloads");
 
     // Loading dnf.conf is optional. AdavaLinux intentionally keeps the package
     // policy in the vendor .repo files and libdnf5 defaults.
@@ -376,6 +393,9 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
             auto & repo_config = repo->get_config();
             repo_config.get_skip_if_unavailable_option().set(true);
+            repo_config.get_timeout_option().set(
+                libdnf5::Option::Priority::RUNTIME, NETWORK_TIMEOUT_SECONDS);
+            repo->set_max_mirror_tries(MAX_MIRROR_TRIES);
 
             const auto & metalink = repo_config.get_metalink_option();
             const auto & mirrorlist = repo_config.get_mirrorlist_option();
@@ -487,7 +507,7 @@ void print_transaction(libdnf5::base::Transaction & transaction) {
     std::cout << "\n";
 }
 
-int run_goal(libdnf5::Goal & goal, bool assume_yes, const std::string & description) {
+int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const std::string & description) {
     auto transaction = goal.resolve();
 
     for (const auto & line : transaction.get_resolve_logs_as_strings()) {
@@ -514,7 +534,36 @@ int run_goal(libdnf5::Goal & goal, bool assume_yes, const std::string & descript
 
     try {
         log_info("Downloading packages...");
-        transaction.download();
+        libdnf5::repo::PackageDownloader downloader(base);
+        downloader.set_fail_fast(false);
+
+        for (auto & item : transaction.get_transaction_packages()) {
+            if (!libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
+                continue;
+            }
+
+            const auto & pkg = item.get_package();
+            if (!transaction.get_download_local_pkgs() &&
+                pkg.get_repo()->get_type() == libdnf5::repo::Repo::Type::COMMANDLINE) {
+                continue;
+            }
+
+            downloader.add(pkg);
+        }
+
+        downloader.download();
+
+        const auto failed_packages = downloader.get_failed_packages();
+        if (!failed_packages.empty()) {
+            for (const auto & pkg : failed_packages) {
+                log_warn("Package fetch failed after retries: " + pkg.get_nevra());
+            }
+            log_err(
+                "Unable to download " + std::to_string(failed_packages.size()) +
+                " required package(s); RPM transaction will not be started");
+            return 3;
+        }
+
         log_ok("Download complete");
         log_info("Running RPM transaction...");
         const auto result = transaction.run();
@@ -549,7 +598,7 @@ int command_install(libdnf5::Base & base, const Options & opts) {
     for (const auto & spec : opts.args) {
         goal.add_rpm_install(spec, settings);
     }
-    return run_goal(goal, opts.assume_yes, "syspckg2 install");
+    return run_goal(base, goal, opts.assume_yes, "syspckg2 install");
 }
 
 int command_remove(libdnf5::Base & base, const Options & opts) {
@@ -561,7 +610,7 @@ int command_remove(libdnf5::Base & base, const Options & opts) {
     for (const auto & spec : opts.args) {
         goal.add_rpm_remove(spec);
     }
-    return run_goal(goal, opts.assume_yes, "syspckg2 remove");
+    return run_goal(base, goal, opts.assume_yes, "syspckg2 remove");
 }
 
 int command_upgrade(libdnf5::Base & base, const Options & opts) {
@@ -579,7 +628,7 @@ int command_upgrade(libdnf5::Base & base, const Options & opts) {
             goal.add_rpm_upgrade(spec, settings);
         }
     }
-    return run_goal(goal, opts.assume_yes, "syspckg2 upgrade");
+    return run_goal(base, goal, opts.assume_yes, "syspckg2 upgrade");
 }
 
 void print_package_line(const libdnf5::rpm::Package & pkg) {
