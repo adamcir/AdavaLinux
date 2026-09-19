@@ -3,7 +3,15 @@ set -eu
 
 OUT="${1:?usage: bootstrap-libdnf5-sysroot.sh OUT_DIR [ARCH]}"
 ARCH="${2:-amd64}"
-DOWNLOADS="$OUT/.downloads"
+
+APTROOT="$OUT/.apt"
+LISTS="$APTROOT/lists"
+CACHE="$APTROOT/cache"
+ARCHIVES="$CACHE/archives"
+STATE="$APTROOT/state"
+SOURCES="$APTROOT/sources.list"
+STATUS="$STATE/status"
+KEYRING="/usr/share/keyrings/debian-archive-keyring.gpg"
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -12,8 +20,7 @@ need() {
     }
 }
 
-need apt
-need apt-cache
+need apt-get
 need dpkg-deb
 
 if [ -f "$OUT/usr/include/libdnf5/base/base.hpp" ] &&
@@ -22,50 +29,44 @@ if [ -f "$OUT/usr/include/libdnf5/base/base.hpp" ] &&
     exit 0
 fi
 
-mkdir -p "$OUT" "$DOWNLOADS"
-rm -rf "$OUT/usr" "$OUT/lib" "$OUT/lib64" "$DOWNLOADS"/*
+if [ ! -f "$KEYRING" ]; then
+    echo "ERR: Missing Debian archive keyring: $KEYRING" >&2
+    echo "Install package 'debian-archive-keyring' on the build host." >&2
+    exit 1
+fi
 
-roots="libdnf5-dev libdnf5-2"
+echo "==> Preparing isolated Debian forky/$ARCH libdnf5 sysroot"
+rm -rf "$OUT"
+mkdir -p "$OUT" "$LISTS/partial" "$ARCHIVES/partial" "$STATE"
+: > "$STATUS"
 
-deps_for() {
-    apt-cache depends --recurse \
-        --no-recommends --no-suggests --no-conflicts --no-breaks \
-        --no-replaces --no-enhances "$@" 2>/dev/null |
-    sed -n -E 's/^[ |]*(Pre)?Depends:[[:space:]]+([^ <|]+).*/\2/p' |
-    sed 's/:any$//' |
-    sort -u
+cat > "$SOURCES" <<EOF
+deb [arch=$ARCH signed-by=$KEYRING] https://deb.debian.org/debian forky main
+EOF
+
+apt_common() {
+    apt-get         -o "Dir::Etc::sourcelist=$SOURCES"         -o "Dir::Etc::sourceparts=-"         -o "Dir::State=$STATE"         -o "Dir::State::status=$STATUS"         -o "Dir::State::lists=$LISTS"         -o "Dir::Cache=$CACHE"         -o "Dir::Cache::archives=$ARCHIVES"         -o "APT::Architecture=$ARCH"         -o "APT::Architectures::=$ARCH"         -o "Acquire::Languages=none"         -o "APT::Install-Recommends=false"         -o "APT::Install-Suggests=false"         "$@"
 }
 
-specs=""
-for pkg in $roots; do
-    specs="$specs $pkg:$ARCH"
-done
+echo "==> Updating isolated forky package metadata"
+apt_common update
 
-deps="$(deps_for $specs || true)"
-packages="$roots $deps"
+echo "==> Downloading libdnf5 development/runtime dependency closure"
+apt_common --download-only -y --no-install-recommends install     libdnf5-dev libdnf5-2
 
-cd "$DOWNLOADS"
-for pkg in $packages; do
-    [ -n "$pkg" ] || continue
-    case "$pkg" in
-        *:*) spec="$pkg" ;;
-        *) spec="$pkg:$ARCH" ;;
-    esac
-
-    echo "==> libdnf5 sysroot: downloading $spec"
-    if ! apt download "$spec" >/dev/null 2>&1; then
-        # Architecture-independent packages do not always accept :amd64.
-        echo "==> libdnf5 sysroot: retrying $pkg"
-        apt download "$pkg" >/dev/null
-    fi
-done
-
-for deb in ./*.deb; do
+count=0
+for deb in "$ARCHIVES"/*.deb; do
     [ -f "$deb" ] || continue
     dpkg-deb -x "$deb" "$OUT"
+    count=$((count + 1))
 done
 
-rm -rf "$DOWNLOADS"
+if [ "$count" -eq 0 ]; then
+    echo "ERR: No packages were downloaded for the libdnf5 sysroot" >&2
+    exit 1
+fi
+
+rm -rf "$APTROOT"
 
 if [ ! -f "$OUT/usr/include/libdnf5/base/base.hpp" ]; then
     echo "ERR: libdnf5 headers were not extracted" >&2
@@ -78,4 +79,4 @@ if [ ! -e "$OUT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] &&
     exit 1
 fi
 
-echo "==> libdnf5 amd64 sysroot ready: $OUT"
+echo "==> libdnf5 $ARCH sysroot ready: $OUT"
