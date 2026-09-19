@@ -45,6 +45,7 @@ sysroot_complete() {
     runtime_lib_present 'libgpgme.so.*' || return 1
     [ -f "$OUT/usr/lib/rpm/rpmrc" ] || return 1
     [ -f "$OUT/usr/lib/rpm/macros" ] || return 1
+    [ -f "$OUT/etc/ssl/certs/ca-certificates.crt" ] || return 1
 }
 
 if sysroot_complete; then
