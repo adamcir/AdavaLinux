@@ -1,0 +1,11 @@
+[adavalinux]
+name=AdavaLinux RPM Repository
+baseurl=http://192.168.10.7/products/AdavaLinux/2.0/rpm/$basearch/
+enabled=1
+type=rpm-md
+priority=10
+pkg_gpgcheck=0
+repo_gpgcheck=0
+
+# Development repository.
+# Enable package and repository GPG verification before a public release.
