@@ -24,6 +24,28 @@ namespace {
 
 constexpr const char * VERSION = "0.2.0";
 
+constexpr const char * COLOR_RED = "\033[31m";
+constexpr const char * COLOR_YELLOW = "\033[33m";
+constexpr const char * COLOR_GREEN = "\033[32m";
+constexpr const char * COLOR_CYAN = "\033[36m";
+constexpr const char * COLOR_RESET = "\033[0m";
+
+void log_err(const std::string & message) {
+    std::cerr << COLOR_RED << "ERR: " << COLOR_RESET << message << "\n";
+}
+
+void log_warn(const std::string & message) {
+    std::cerr << COLOR_YELLOW << "WARN: " << COLOR_RESET << message << "\n";
+}
+
+void log_ok(const std::string & message) {
+    std::cout << COLOR_GREEN << "OK: " << COLOR_RESET << message << "\n";
+}
+
+void log_info(const std::string & message) {
+    std::cout << COLOR_CYAN << "INFO: " << COLOR_RESET << message << "\n";
+}
+
 enum class SourceMode {
     AUTO,
     ADAVA,
@@ -38,12 +60,14 @@ struct Options {
 };
 
 void banner() {
-    std::cerr << "SystemPackager 2 by Adava Software for Linux in 2026 v" << VERSION << "\n";
+    std::cerr << COLOR_GREEN << "SystemPackager 2" << COLOR_RESET
+              << " by Adava Software for Linux in 2026 "
+              << COLOR_YELLOW << "v" << VERSION << COLOR_RESET << "\n";
 }
 
 void usage(const char * prog) {
     std::cerr
-        << "Usage:\n"
+        << COLOR_YELLOW << "Usage:" << COLOR_RESET << "\n"
         << "  " << prog << " <package>... [--source auto|adava|fedora] [-y]\n"
         << "  " << prog << " install <package>... [--source auto|adava|fedora] [-y]\n"
         << "  " << prog << " remove <package>... [-y]\n"
@@ -172,6 +196,7 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
     // Loading dnf.conf is optional. AdavaLinux intentionally keeps the package
     // policy in the vendor .repo files and libdnf5 defaults.
+    log_info("Preparing RPM/libdnf5 backend...");
     base.setup();
 
     auto repo_sack = base.get_repo_sack();
@@ -185,7 +210,9 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
     base.lock_system_repo(
         write_lock ? libdnf5::utils::LockAccess::WRITE : libdnf5::utils::LockAccess::READ,
         libdnf5::utils::LockBlocking::BLOCKING);
+    log_info("Loading repositories...");
     repo_sack->load_repos();
+    log_ok("Repositories loaded");
 }
 
 bool confirm_transaction(bool assume_yes) {
@@ -193,7 +220,7 @@ bool confirm_transaction(bool assume_yes) {
         return true;
     }
 
-    std::cerr << "Continue? [Y/n] ";
+    std::cerr << COLOR_YELLOW << "Continue? [Y/n] " << COLOR_RESET;
     std::string answer;
     std::getline(std::cin, answer);
     return answer.empty() || answer == "y" || answer == "Y" || answer == "yes" || answer == "YES";
@@ -205,10 +232,23 @@ void print_transaction(libdnf5::base::Transaction & transaction) {
         return;
     }
 
-    std::cout << "\nTransaction:\n";
+    std::cout << "\n" << COLOR_YELLOW << "Transaction:" << COLOR_RESET << "\n";
     for (const auto & item : packages) {
-        std::cout << "  "
-                  << libdnf5::transaction::transaction_item_action_to_string(item.get_action())
+        const auto action = libdnf5::transaction::transaction_item_action_to_string(item.get_action());
+        const char * color = COLOR_CYAN;
+        if (action.find("Install") != std::string::npos || action.find("INSTALL") != std::string::npos) {
+            color = COLOR_GREEN;
+        } else if (
+            action.find("Remove") != std::string::npos || action.find("Erase") != std::string::npos ||
+            action.find("REMOVE") != std::string::npos || action.find("ERASE") != std::string::npos) {
+            color = COLOR_RED;
+        } else if (
+            action.find("Upgrade") != std::string::npos || action.find("Downgrade") != std::string::npos ||
+            action.find("UPGRADE") != std::string::npos || action.find("DOWNGRADE") != std::string::npos) {
+            color = COLOR_YELLOW;
+        }
+
+        std::cout << "  " << color << action << COLOR_RESET
                   << "  " << item.get_package().get_nevra()
                   << "  [" << item.get_package().get_repo_id() << "]\n";
     }
@@ -219,47 +259,46 @@ int run_goal(libdnf5::Goal & goal, bool assume_yes, const std::string & descript
     auto transaction = goal.resolve();
 
     for (const auto & line : transaction.get_resolve_logs_as_strings()) {
-        std::cerr << line << "\n";
+        log_warn(line);
     }
 
     if (fatal_resolve_problem(transaction.get_problems())) {
-        std::cerr << "ERR: Dependency resolution failed.\n";
+        log_err("Dependency resolution failed.");
         return 2;
     }
 
     if (transaction.empty()) {
-        std::cout << "Nothing to do.\n";
+        log_ok("Nothing to do");
         return 0;
     }
 
     print_transaction(transaction);
     if (!confirm_transaction(assume_yes)) {
-        std::cout << "Cancelled.\n";
+        log_warn("Cancelled");
         return 0;
     }
 
     transaction.set_description(description);
 
     try {
-        std::cout << "Downloading packages...\n";
+        log_info("Downloading packages...");
         transaction.download();
-        std::cout << "Running RPM transaction...\n";
+        log_ok("Download complete");
+        log_info("Running RPM transaction...");
         const auto result = transaction.run();
         if (result != libdnf5::base::Transaction::TransactionRunResult::SUCCESS) {
-            std::cerr << "ERR: "
-                      << libdnf5::base::Transaction::transaction_result_to_string(result)
-                      << "\n";
+            log_err(libdnf5::base::Transaction::transaction_result_to_string(result));
             for (const auto & problem : transaction.get_transaction_problems()) {
-                std::cerr << "  " << problem << "\n";
+                std::cerr << "  " << COLOR_RED << problem << COLOR_RESET << "\n";
             }
             return 3;
         }
     } catch (const std::exception & ex) {
-        std::cerr << "ERR: " << ex.what() << "\n";
+        log_err(ex.what());
         return 3;
     }
 
-    std::cout << "Done.\n";
+    log_ok("Transaction completed");
     return 0;
 }
 
@@ -347,7 +386,7 @@ int command_search(libdnf5::Base & base, const Options & opts) {
     result.filter_latest_evr();
 
     if (result.empty()) {
-        std::cout << "No matching packages.\n";
+        log_warn("No matching packages");
         return 1;
     }
 
@@ -417,11 +456,11 @@ int command_clean(libdnf5::Base & base) {
         std::error_code ec;
         std::filesystem::remove_all(cachedir, ec);
         if (ec) {
-            std::cerr << "ERR: Unable to clean cache " << cachedir << ": " << ec.message() << "\n";
+            log_err("Unable to clean cache " + cachedir + ": " + ec.message());
             return 1;
         }
     }
-    std::cout << "Cache cleaned.\n";
+    log_ok("Cache cleaned");
     return 0;
 }
 
@@ -446,7 +485,7 @@ int main(int argc, char ** argv) {
         const auto opts = parse_options(argc, argv);
 
         if (is_transaction_command(opts.command) && geteuid() != 0) {
-            std::cerr << "ERR: Package transactions require root.\n";
+            log_err("Package transactions require root.");
             return 1;
         }
 
@@ -487,7 +526,7 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
         return 1;
     } catch (const std::exception & ex) {
-        std::cerr << "ERR: " << ex.what() << "\n";
+        log_err(ex.what());
         return 1;
     }
 }
