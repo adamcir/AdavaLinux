@@ -129,11 +129,6 @@ require_busybox_dir() {
   [ -d "$$BUSYBOX_DIR" ] || die "Directory not found: $$BUSYBOX_DIR"
 }
 resolve_latest_kernel_artifact() {
-  if [ -n "$$OUT_KERNEL_NAME" ] && [ -f "$$OUT_DIR/$$OUT_KERNEL_NAME" ]; then
-    say "Using kernel artifact: $$OUT_KERNEL_NAME"
-    return 0
-  fi
-
   latest_kernel="$$(find "$$OUT_DIR" -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null | sort -V | tail -n 1)"
   [ -n "$$latest_kernel" ] || die "No kernel artifact found in $$OUT_DIR (expected vmlinuz-*). Run make kernel first."
 
