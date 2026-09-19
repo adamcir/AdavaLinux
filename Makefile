@@ -515,18 +515,18 @@ iso:
 	  *) die "syspckg is not an x86_64 binary: $$SYSPCKG_INFO" ;;
 	esac
 	mkdir -p "$$ROOTFS_DIR/usr/bin"
-	cp -a "$SYSPCKG_BIN" "$ROOTFS_DIR/usr/bin/syspckg"
-	ln -sf /usr/bin/syspckg "$ROOTFS_DIR/bin/syspckg"
+	cp -a "$$SYSPCKG_BIN" "$$ROOTFS_DIR/usr/bin/syspckg"
+	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
 	say "Installing SystemPackager 2 into rootfs"
-	SYSPCKG2_BIN="$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
-	[ -x "$SYSPCKG2_BIN" ] || die "Executable syspckg2 not found: $SYSPCKG2_BIN"
-	SYSPCKG2_INFO="$(file -b "$SYSPCKG2_BIN" 2>/dev/null || true)"
-	case "$SYSPCKG2_INFO" in
-	  *"$SYSPCKG_MATCH"*) ;;
-	  *) die "syspckg2 is not an x86_64 binary: $SYSPCKG2_INFO" ;;
+	SYSPCKG2_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
+	[ -x "$$SYSPCKG2_BIN" ] || die "Executable syspckg2 not found: $$SYSPCKG2_BIN"
+	SYSPCKG2_INFO="$$(file -b "$$SYSPCKG2_BIN" 2>/dev/null || true)"
+	case "$$SYSPCKG2_INFO" in
+	  *"$$SYSPCKG_MATCH"*) ;;
+	  *) die "syspckg2 is not an x86_64 binary: $$SYSPCKG2_INFO" ;;
 	esac
-	cp -a "$SYSPCKG2_BIN" "$ROOTFS_DIR/usr/bin/syspckg2"
-	ln -sf /usr/bin/syspckg2 "$ROOTFS_DIR/bin/syspckg2"
+	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/bin/syspckg2"
+	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
 	say "Copying runtime loader + required shared libraries for syspckg/syspckg2 into rootfs"
 	if [ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then
 	  copy_one_lib "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
@@ -548,8 +548,8 @@ iso:
 	  fi
 	fi
 	if [ "$$HOST_ARCH" = "x86_64" ]; then
-	  copy_deps_for_binary "$ROOTFS_DIR/usr/bin/syspckg"
-	  copy_deps_for_binary "$ROOTFS_DIR/usr/bin/syspckg2"
+	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg"
+	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg2"
 	else
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
