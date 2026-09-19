@@ -21,12 +21,14 @@ SYSPCKG_SRC_DIR := $(PROJECT_DIR)/tools/syspckg
 SYSPCKG_BIN := $(SYSPCKG_SRC_DIR)/syspckg
 SYSPCKG2_SRC_DIR := $(PROJECT_DIR)/tools/syspckg2
 SYSPCKG2_BIN := $(SYSPCKG2_SRC_DIR)/syspckg2
+SYSPCKG2_BOOTSTRAP := $(SYSPCKG2_SRC_DIR)/bootstrap-libdnf5-sysroot.sh
 
 TARGET_ARCH ?= x86_64
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 CROSS_COMPILE ?=
 KERNEL_DEFCONFIG ?= defconfig
 SYSPCKG_SYSROOT ?=
+SYSPCKG2_SYSROOT ?=
 SYSPCKG_PACKAGE_DIR ?= $(PROJECT_DIR)/../syspckg/packages
 GRUB_I386_PC_DIR ?=
 GRUB_X86_64_EFI_DIR ?=
@@ -95,6 +97,8 @@ SYSPCKG_SRC_DIR="$(SYSPCKG_SRC_DIR)"
 SYSPCKG_BIN="$(SYSPCKG_BIN)"
 SYSPCKG2_SRC_DIR="$(SYSPCKG2_SRC_DIR)"
 SYSPCKG2_BIN="$(SYSPCKG2_BIN)"
+SYSPCKG2_BOOTSTRAP="$(SYSPCKG2_BOOTSTRAP)"
+SYSPCKG2_SYSROOT="$(SYSPCKG2_SYSROOT)"
 JOBS="$(JOBS)"
 TARGET_ARCH="$(TARGET_ARCH)"
 CROSS_COMPILE="$(CROSS_COMPILE)"
@@ -265,6 +269,49 @@ ensure_amd64_ncurses() {
   NCURSES_CPPFLAGS="-I$$NCURSES_SYSROOT/usr/include"
   NCURSES_LDLIBS="$$NCURSES_LIBDIR/libncurses.a $$NCURSES_LIBDIR/libtinfo.a"
 }
+ensure_syspckg2_sysroot() {
+  if [ -n "$$SYSPCKG2_SYSROOT" ]; then
+    [ -f "$$SYSPCKG2_SYSROOT/usr/include/libdnf5/base/base.hpp" ] || die "SYSPCKG2_SYSROOT is missing libdnf5 headers"
+    [ -e "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] || \
+    [ -e "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so.2" ] || die "SYSPCKG2_SYSROOT is missing libdnf5.so"
+    return 0
+  fi
+
+  need_cmd apt
+  need_cmd apt-cache
+  need_cmd dpkg-deb
+  ensure_amd64_arch_enabled
+  [ -f "$$SYSPCKG2_BOOTSTRAP" ] || die "Missing libdnf5 bootstrap script: $$SYSPCKG2_BOOTSTRAP"
+
+  SYSPCKG2_SYSROOT="$$TOOLCACHE_DIR/libdnf5-amd64"
+  say "Preparing libdnf5 amd64 sysroot"
+  sh "$$SYSPCKG2_BOOTSTRAP" "$$SYSPCKG2_SYSROOT" amd64
+}
+copy_syspckg2_runtime_from_sysroot() {
+  ensure_syspckg2_sysroot
+
+  for rel in lib/x86_64-linux-gnu usr/lib/x86_64-linux-gnu; do
+    srcdir="$$SYSPCKG2_SYSROOT/$$rel"
+    [ -d "$$srcdir" ] || continue
+    dstdir="$$ROOTFS_DIR/$$rel"
+    mkdir -p "$$dstdir"
+    find "$$srcdir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -a {} "$$dstdir/" \;
+  done
+
+  if [ -d "$$SYSPCKG2_SYSROOT/lib64" ]; then
+    mkdir -p "$$ROOTFS_DIR/lib64"
+    find "$$SYSPCKG2_SYSROOT/lib64" -maxdepth 1 \( -type f -o -type l \) -exec cp -a {} "$$ROOTFS_DIR/lib64/" \;
+  fi
+
+  for rel in usr/lib/rpm usr/share/rpm; do
+    if [ -d "$$SYSPCKG2_SYSROOT/$$rel" ]; then
+      mkdir -p "$$ROOTFS_DIR/$$rel"
+      cp -a "$$SYSPCKG2_SYSROOT/$$rel/." "$$ROOTFS_DIR/$$rel/"
+    fi
+  done
+
+  mkdir -p "$$ROOTFS_DIR/var/cache/libdnf5" "$$ROOTFS_DIR/var/lib/rpm" "$$ROOTFS_DIR/var/log"
+}
 ensure_amd64_sysroot() {
   if [ -n "$$SYSPCKG_SYSROOT" ]; then
     [ -f "$$SYSPCKG_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
@@ -387,15 +434,19 @@ tools:
 	cp -f "$$SYSPCKG_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 	[ -d "$$SYSPCKG2_SRC_DIR" ] || die "tools/syspckg2 not found"
-	say "Building SystemPackager 2 (RPM/DNF5 frontend)"
+	say "Building SystemPackager 2 (direct libdnf5 frontend)"
+	ensure_syspckg2_sysroot
 	if [ -n "$$CROSS_COMPILE" ]; then
-	  make -C "$$SYSPCKG2_SRC_DIR" clean all CC="$${CROSS_COMPILE}gcc"
+	  need_cmd "$${CROSS_COMPILE}g++"
+	  make -C "$$SYSPCKG2_SRC_DIR" clean all CXX="$${CROSS_COMPILE}g++" SYSROOT="$$SYSPCKG2_SYSROOT"
 	else
-	  make -C "$$SYSPCKG2_SRC_DIR" clean all
+	  need_cmd g++
+	  make -C "$$SYSPCKG2_SRC_DIR" clean all CXX="g++" SYSROOT="$$SYSPCKG2_SYSROOT"
 	fi
 	[ -x "$$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $$SYSPCKG2_BIN"
 	cp -f "$$SYSPCKG2_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
 	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
+
 kernel:
 	$(COMMON_SH)
 	require_source_dirs
@@ -538,7 +589,7 @@ iso:
 	esac
 	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/bin/syspckg2"
 	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
-	say "Copying runtime loader + required shared libraries for syspckg/syspckg2 into rootfs"
+	say "Copying runtime loader + libraries for SystemPackager 1 and libdnf5 SystemPackager 2"
 	if [ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then
 	  copy_one_lib "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
 	  ln -sf ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$$ROOTFS_DIR/lib64/ld-linux-x86-64.so.2"
@@ -546,6 +597,7 @@ iso:
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
 	fi
+	copy_syspckg2_runtime_from_sysroot
 	say "Copying minimal terminfo into rootfs"
 	if [ -d /usr/share/terminfo ]; then
 	  mkdir -p "$$ROOTFS_DIR/usr/share/terminfo"
@@ -560,7 +612,6 @@ iso:
 	fi
 	if [ "$$HOST_ARCH" = "x86_64" ]; then
 	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg"
-	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg2"
 	else
 	  ensure_amd64_sysroot
 	  prepare_syspckg_runtime_from_sysroot
