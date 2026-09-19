@@ -310,14 +310,23 @@ copy_syspckg2_runtime_from_sysroot() {
   [ -n "$$loader" ] || die "libdnf5 sysroot is missing ld-linux-x86-64.so.2"
   cp -aL "$$loader" "$$private_lib/ld-linux-x86-64.so.2"
 
-  for rel in usr/lib/rpm usr/share/rpm; do
-    if [ -d "$$SYSPCKG2_SYSROOT/$$rel" ]; then
-      mkdir -p "$$ROOTFS_DIR/$$rel"
-      cp -a "$$SYSPCKG2_SYSROOT/$$rel/." "$$ROOTFS_DIR/$$rel/"
+  for rel in usr/lib/rpm usr/share/rpm etc/rpm; do
+    if [ -d "$SYSPCKG2_SYSROOT/$rel" ]; then
+      mkdir -p "$ROOTFS_DIR/$rel"
+      cp -a "$SYSPCKG2_SYSROOT/$rel/." "$ROOTFS_DIR/$rel/"
     fi
   done
 
-  mkdir -p "$$ROOTFS_DIR/var/cache/libdnf5" "$$ROOTFS_DIR/var/lib/rpm" "$$ROOTFS_DIR/var/log"
+  if [ -d "$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins" ]; then
+    mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins"
+    cp -a "$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins/." \
+      "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins/"
+  fi
+
+  [ -f "$ROOTFS_DIR/usr/lib/rpm/rpmrc" ] || die "RPM runtime is missing /usr/lib/rpm/rpmrc"
+  [ -f "$ROOTFS_DIR/usr/lib/rpm/macros" ] || die "RPM runtime is missing /usr/lib/rpm/macros"
+
+  mkdir -p "$ROOTFS_DIR/var/cache/libdnf5" "$ROOTFS_DIR/var/lib/rpm" "$ROOTFS_DIR/var/log"
 }
 ensure_amd64_sysroot() {
   if [ -n "$$SYSPCKG_SYSROOT" ]; then
