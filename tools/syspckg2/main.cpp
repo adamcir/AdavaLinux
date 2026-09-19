@@ -3,6 +3,7 @@
 #include <libdnf5/base/transaction.hpp>
 #include <libdnf5/base/transaction_package.hpp>
 #include <libdnf5/common/sack/query_cmp.hpp>
+#include <libdnf5/repo/download_callbacks.hpp>
 #include <libdnf5/repo/repo_query.hpp>
 #include <libdnf5/repo/repo_sack.hpp>
 #include <libdnf5/rpm/package_query.hpp>
@@ -13,9 +14,14 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <list>
+#include <memory>
 #include <set>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <unistd.h>
@@ -45,6 +51,145 @@ void log_ok(const std::string & message) {
 void log_info(const std::string & message) {
     std::cout << COLOR_CYAN << "INFO: " << COLOR_RESET << message << "\n";
 }
+
+std::string format_bytes(double bytes) {
+    if (bytes <= 0.0) {
+        return "unknown size";
+    }
+
+    static constexpr const char * units[] = {"B", "KiB", "MiB", "GiB"};
+    std::size_t unit = 0;
+    while (bytes >= 1024.0 && unit + 1 < std::size(units)) {
+        bytes /= 1024.0;
+        ++unit;
+    }
+
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(unit == 0 ? 0 : 1) << bytes << " " << units[unit];
+    return out.str();
+}
+
+class VerboseDownloadCallbacks : public libdnf5::repo::DownloadCallbacks {
+public:
+    struct Result {
+        std::size_t successful{0};
+        std::size_t failed{0};
+        std::string last_error;
+    };
+
+    const Result * result_for(const std::string & description) const {
+        const auto it = results_.find(description);
+        return it == results_.end() ? nullptr : &it->second;
+    }
+
+private:
+    struct DownloadState {
+        std::string description;
+        double total{0.0};
+        int last_bucket{-10};
+    };
+
+    void * add_new_download(
+        [[maybe_unused]] void * user_data,
+        const char * description,
+        double total_to_download) override {
+        downloads_.push_back(DownloadState{
+            description ? description : "(unknown download)",
+            total_to_download,
+            -10,
+        });
+        auto & state = downloads_.back();
+
+        log_info(
+            "Fetch start: " + state.description +
+            " (" + format_bytes(total_to_download) + ")");
+        return &state;
+    }
+
+    int progress(void * user_cb_data, double total_to_download, double downloaded) override {
+        auto * state = static_cast<DownloadState *>(user_cb_data);
+        if (!state || total_to_download <= 0.0) {
+            return OK;
+        }
+
+        int percent = static_cast<int>((downloaded * 100.0) / total_to_download);
+        percent = std::clamp(percent, 0, 100);
+        const int bucket = (percent / 10) * 10;
+
+        if (bucket >= state->last_bucket + 10 || percent == 100) {
+            state->last_bucket = bucket;
+            log_info(
+                "Fetch progress: " + state->description + " " +
+                std::to_string(percent) + "% (" +
+                format_bytes(downloaded) + "/" + format_bytes(total_to_download) + ")");
+        }
+
+        return OK;
+    }
+
+    int end(void * user_cb_data, TransferStatus status, const char * msg) override {
+        auto * state = static_cast<DownloadState *>(user_cb_data);
+        const std::string description = state ? state->description : "(unknown download)";
+        auto & result = results_[description];
+
+        switch (status) {
+            case TransferStatus::SUCCESSFUL:
+                ++result.successful;
+                log_ok("Fetch complete: " + description);
+                break;
+            case TransferStatus::ALREADYEXISTS:
+                ++result.successful;
+                log_info("Fetch cache hit: " + description);
+                break;
+            case TransferStatus::ERROR: {
+                ++result.failed;
+                result.last_error = msg ? msg : "unknown download error";
+                log_warn("Fetch failed: " + description + " -> " + result.last_error);
+                break;
+            }
+        }
+
+        return OK;
+    }
+
+    int mirror_failure(
+        [[maybe_unused]] void * user_cb_data,
+        const char * msg,
+        const char * url,
+        const char * metadata) override {
+        std::string detail = "Mirror failed";
+        if (url && *url) {
+            detail += ": ";
+            detail += url;
+        }
+        if (metadata && *metadata) {
+            detail += " [";
+            detail += metadata;
+            detail += "]";
+        }
+        if (msg && *msg) {
+            detail += " -> ";
+            detail += msg;
+        }
+        log_warn(detail);
+        return OK;
+    }
+
+    void fastest_mirror(
+        [[maybe_unused]] void * user_cb_data,
+        FastestMirrorStage stage,
+        const char * ptr) override {
+        if (stage == FastestMirrorStage::DETECTION && ptr) {
+            const auto count = *reinterpret_cast<const long *>(ptr);
+            log_info("Testing " + std::to_string(count) + " repository mirrors...");
+        } else if (stage == FastestMirrorStage::STATUS && ptr && *ptr) {
+            log_warn(std::string("Mirror detection failed: ") + ptr);
+        }
+    }
+
+    std::list<DownloadState> downloads_;
+    std::unordered_map<std::string, Result> results_;
+};
 
 enum class SourceMode {
     AUTO,
@@ -226,12 +371,27 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
                 continue;
             }
 
-            enabled_repo_ids.push_back(repo->get_id());
+            const auto repo_id = repo->get_id();
+            enabled_repo_ids.push_back(repo_id);
 
-            // A broken mirror/repository must not abort the whole operation.
-            // We check the result after load_repos() and only fail if none
-            // of the enabled repositories were usable.
-            repo->get_config().get_skip_if_unavailable_option().set(true);
+            auto & repo_config = repo->get_config();
+            repo_config.get_skip_if_unavailable_option().set(true);
+
+            const auto & metalink = repo_config.get_metalink_option();
+            const auto & mirrorlist = repo_config.get_mirrorlist_option();
+            const auto & baseurls = repo_config.get_baseurl_option().get_value();
+
+            if (!metalink.empty() && !metalink.get_value().empty()) {
+                log_info("Repository " + repo_id + ": metalink " + metalink.get_value());
+            } else if (!mirrorlist.empty() && !mirrorlist.get_value().empty()) {
+                log_info("Repository " + repo_id + ": mirrorlist " + mirrorlist.get_value());
+            } else if (!baseurls.empty()) {
+                for (const auto & url : baseurls) {
+                    log_info("Repository " + repo_id + ": baseurl " + url);
+                }
+            } else {
+                log_warn("Repository " + repo_id + " has no configured download source");
+            }
         }
     }
 
@@ -239,21 +399,39 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         throw std::runtime_error("No enabled package repositories");
     }
 
+    auto download_callbacks = std::make_unique<VerboseDownloadCallbacks>();
+    auto * download_callbacks_ptr = download_callbacks.get();
+    base.set_download_callbacks(std::move(download_callbacks));
+
     base.lock_system_repo(
         write_lock ? libdnf5::utils::LockAccess::WRITE : libdnf5::utils::LockAccess::READ,
         libdnf5::utils::LockBlocking::BLOCKING);
 
-    log_info("Loading repositories...");
+    log_info("Loading repository metadata...");
     repo_sack->load_repos();
 
     std::size_t usable_repositories = 0;
     for (const auto & repo_id : enabled_repo_ids) {
-        libdnf5::rpm::PackageQuery repo_packages(base);
-        repo_packages.filter_available();
-        repo_packages.filter_repo_id(repo_id);
+        const auto * result = download_callbacks_ptr->result_for(repo_id);
 
-        if (repo_packages.empty()) {
-            log_warn("Unable to fetch repository '" + repo_id + "'; continuing with remaining repositories");
+        // A cache hit or a successful metadata transfer means the repository
+        // is usable. If libdnf5 did not invoke the callback (for example when
+        // metadata was already loaded internally), verify package visibility.
+        bool usable = result && result->successful > 0;
+        if (!usable && (!result || result->failed == 0)) {
+            libdnf5::rpm::PackageQuery repo_packages(base);
+            repo_packages.filter_available();
+            repo_packages.filter_repo_id(repo_id);
+            usable = !repo_packages.empty();
+        }
+
+        if (!usable) {
+            std::string message = "Repository failed: " + repo_id;
+            if (result && !result->last_error.empty()) {
+                message += " -> " + result->last_error;
+            }
+            message += "; continuing with remaining repositories";
+            log_warn(message);
         } else {
             ++usable_repositories;
             log_ok("Repository ready: " + repo_id);
