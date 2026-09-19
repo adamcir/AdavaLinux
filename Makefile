@@ -10,7 +10,7 @@ DISK_INITRAMFS_DIR := $(PROJECT_DIR)/disk-initramfs
 ISO_DIR := $(PROJECT_DIR)/iso
 TOOLCACHE_DIR := $(PROJECT_DIR)/.toolcache
 
-KERNEL_DIR := $(PROJECT_DIR)/linux-6.19.11
+KERNEL_DIR ?= $(shell find "$(PROJECT_DIR)" -maxdepth 1 -mindepth 1 -type d -name 'linux-[0-9]*' -printf '%p\n' 2>/dev/null | sort -V | tail -n 1)
 BUSYBOX_DIR := $(PROJECT_DIR)/busybox-1.36.1
 FILESFORLINUX_ROOTFS_DIR := $(PROJECT_DIR)/filesforlinux/rootfs
 FILESFORLINUX_DISK_INITRAMFS_DIR := $(PROJECT_DIR)/filesforlinux/initramfs-disk
@@ -122,11 +122,24 @@ say() { printf "\n==> %s\n" "$$*"; }
 die() { printf "\nERROR: %s\n" "$$*" >&2; exit 1; }
 need_cmd() { command -v "$$1" >/dev/null 2>&1 || die "Missing command: $$1"; }
 require_source_dirs() {
-  [ -d "$$KERNEL_DIR" ] || die "Directory not found: $$KERNEL_DIR"
+  [ -n "$$KERNEL_DIR" ] && [ -d "$$KERNEL_DIR" ] || die "No Linux source tree found. Put linux-<version>/ in the project root or set KERNEL_DIR."
   [ -d "$$BUSYBOX_DIR" ] || die "Directory not found: $$BUSYBOX_DIR"
 }
 require_busybox_dir() {
   [ -d "$$BUSYBOX_DIR" ] || die "Directory not found: $$BUSYBOX_DIR"
+}
+resolve_latest_kernel_artifact() {
+  if [ -n "$$OUT_KERNEL_NAME" ] && [ -f "$$OUT_DIR/$$OUT_KERNEL_NAME" ]; then
+    say "Using kernel artifact: $$OUT_KERNEL_NAME"
+    return 0
+  fi
+
+  latest_kernel="$$(find "$$OUT_DIR" -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null | sort -V | tail -n 1)"
+  [ -n "$$latest_kernel" ] || die "No kernel artifact found in $$OUT_DIR (expected vmlinuz-*). Run make kernel first."
+
+  OUT_KERNEL_NAME="$$latest_kernel"
+  KERNEL_VERSION="$${latest_kernel#vmlinuz-}"
+  say "Using latest kernel artifact: $$OUT_KERNEL_NAME"
 }
 check_toolchain() {
   if [ -n "$$CROSS_COMPILE" ]; then
@@ -469,7 +482,7 @@ iso:
 	need_cmd mformat
 	need_cmd mcopy
 	check_toolchain
-	[ -f "$$OUT_DIR/$$OUT_KERNEL_NAME" ] || die "Missing kernel artifact: $$OUT_DIR/$$OUT_KERNEL_NAME. Run make kernel first."
+	resolve_latest_kernel_artifact
 	[ -x "$$BUSYBOX_DIR/busybox" ] || die "Missing BusyBox binary: $$BUSYBOX_DIR/busybox. Run make busybox first."
 	mkdir -p "$$OUT_DIR" "$$TOOLCACHE_DIR"
 	rm -rf "$$ROOTFS_DIR" "$$DISK_INITRAMFS_DIR" "$$ISO_DIR"
@@ -577,10 +590,16 @@ iso:
 	cp -f "$$OUT_DIR/$$OUT_KERNEL_NAME" "$$ISO_DIR/boot/$$OUT_KERNEL_NAME"
 	cp -f "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_INSTALLER_INITRAMFS_NAME"
 	cp -f "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" "$$ISO_DIR/boot/$$OUT_DISK_INITRAMFS_NAME"
-	[ -f "$$MEMTEST_BIOS_IMAGE" ] || die "Missing Memtest86+ BIOS image: $$MEMTEST_BIOS_IMAGE"
-	[ -f "$$MEMTEST_UEFI_IMAGE" ] || die "Missing Memtest86+ UEFI image: $$MEMTEST_UEFI_IMAGE"
-	cp -f "$$MEMTEST_BIOS_IMAGE" "$$ISO_DIR/boot/memtest86+.bin"
-	cp -f "$$MEMTEST_UEFI_IMAGE" "$$ISO_DIR/boot/memtest86+x64.efi"
+	if [ -f "$$MEMTEST_BIOS_IMAGE" ]; then
+	  cp -f "$$MEMTEST_BIOS_IMAGE" "$$ISO_DIR/boot/memtest86+.bin"
+	else
+	  say "Memtest86+ BIOS image not found -> skipping"
+	fi
+	if [ -f "$$MEMTEST_UEFI_IMAGE" ]; then
+	  cp -f "$$MEMTEST_UEFI_IMAGE" "$$ISO_DIR/boot/memtest86+x64.efi"
+	else
+	  say "Memtest86+ UEFI image not found -> skipping"
+	fi
 	GRUB_CFG_TEMPLATE="$$FILESFORLINUX_ISO_DIR/boot/grub/grub.cfg"
 	[ -f "$$GRUB_CFG_TEMPLATE" ] || die "Missing GRUB configuration: $$GRUB_CFG_TEMPLATE"
 	cp -f "$$GRUB_CFG_TEMPLATE" "$$ISO_DIR/boot/grub/grub.cfg"
