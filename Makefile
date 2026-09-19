@@ -288,18 +288,27 @@ ensure_syspckg2_sysroot() {
 copy_syspckg2_runtime_from_sysroot() {
   ensure_syspckg2_sysroot
 
+  private_lib="$$ROOTFS_DIR/usr/lib/syspckg2"
+  mkdir -p "$$private_lib" "$$ROOTFS_DIR/usr/libexec/syspckg2"
+
   for rel in lib/x86_64-linux-gnu usr/lib/x86_64-linux-gnu; do
     srcdir="$$SYSPCKG2_SYSROOT/$$rel"
     [ -d "$$srcdir" ] || continue
-    dstdir="$$ROOTFS_DIR/$$rel"
-    mkdir -p "$$dstdir"
-    find "$$srcdir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -a {} "$$dstdir/" \;
+    find "$$srcdir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -aL {} "$$private_lib/" \;
   done
 
-  if [ -d "$$SYSPCKG2_SYSROOT/lib64" ]; then
-    mkdir -p "$$ROOTFS_DIR/lib64"
-    find "$$SYSPCKG2_SYSROOT/lib64" -maxdepth 1 \( -type f -o -type l \) -exec cp -a {} "$$ROOTFS_DIR/lib64/" \;
-  fi
+  loader=""
+  for cand in \
+    "$$SYSPCKG2_SYSROOT/lib64/ld-linux-x86-64.so.2" \
+    "$$SYSPCKG2_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" \
+    "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"; do
+    if [ -f "$$cand" ]; then
+      loader="$$cand"
+      break
+    fi
+  done
+  [ -n "$$loader" ] || die "libdnf5 sysroot is missing ld-linux-x86-64.so.2"
+  cp -aL "$$loader" "$$private_lib/ld-linux-x86-64.so.2"
 
   for rel in usr/lib/rpm usr/share/rpm; do
     if [ -d "$$SYSPCKG2_SYSROOT/$$rel" ]; then
@@ -585,9 +594,17 @@ iso:
 	  *"$$SYSPCKG_MATCH"*) ;;
 	  *) die "syspckg2 is not an x86_64 binary: $$SYSPCKG2_INFO" ;;
 	esac
-	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/bin/syspckg2"
+	mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg2"
+	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/libexec/syspckg2/syspckg2.real"
+	cat > "$$ROOTFS_DIR/usr/bin/syspckg2" <<'EOF'
+#!/bin/sh
+exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 \
+  --library-path /usr/lib/syspckg2 \
+  /usr/libexec/syspckg2/syspckg2.real "$$@"
+EOF
+	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg2"
 	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
-	say "Copying runtime loader + libraries for SystemPackager 1 and libdnf5 SystemPackager 2"
+	say "Copying runtime loader + libraries for SystemPackager 1 and private libdnf5 SystemPackager 2"
 	if [ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then
 	  copy_one_lib "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
 	  ln -sf ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$$ROOTFS_DIR/lib64/ld-linux-x86-64.so.2"
