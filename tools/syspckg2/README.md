@@ -61,3 +61,11 @@ AdavaLinux and Fedora.
 
 The ISO build copies the required shared libraries and RPM runtime data into
 the AdavaLinux rootfs. No `/usr/bin/dnf5` executable is required.
+
+
+## Repository failures
+
+SystemPackager 2 marks enabled repositories as skip-if-unavailable while loading metadata.
+If one repository cannot be fetched, it prints a warning and continues with the
+remaining repositories. If none of the enabled repositories can provide package
+metadata, the command fails.
