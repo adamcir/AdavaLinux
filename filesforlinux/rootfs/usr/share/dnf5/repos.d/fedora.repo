@@ -1,0 +1,19 @@
+[fedora]
+name=Fedora 44 - $basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=$basearch
+enabled=1
+type=rpm-md
+priority=90
+pkg_gpgcheck=1
+repo_gpgcheck=0
+gpgkey=https://fedoraproject.org/fedora.gpg
+
+[updates]
+name=Fedora 44 - $basearch - Updates
+metalink=https://mirrors.fedoraproject.org/metalink?repo=updates-released-f44&arch=$basearch
+enabled=1
+type=rpm-md
+priority=90
+pkg_gpgcheck=1
+repo_gpgcheck=0
+gpgkey=https://fedoraproject.org/fedora.gpg
