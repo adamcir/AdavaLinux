@@ -311,22 +311,36 @@ copy_syspckg2_runtime_from_sysroot() {
   cp -aL "$$loader" "$$private_lib/ld-linux-x86-64.so.2"
 
   for rel in usr/lib/rpm usr/share/rpm etc/rpm; do
-    if [ -d "$SYSPCKG2_SYSROOT/$rel" ]; then
-      mkdir -p "$ROOTFS_DIR/$rel"
-      cp -a "$SYSPCKG2_SYSROOT/$rel/." "$ROOTFS_DIR/$rel/"
+    if [ -d "$$SYSPCKG2_SYSROOT/$$rel" ]; then
+      mkdir -p "$$ROOTFS_DIR/$$rel"
+      cp -a "$$SYSPCKG2_SYSROOT/$$rel/." "$$ROOTFS_DIR/$$rel/"
     fi
   done
 
-  if [ -d "$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins" ]; then
-    mkdir -p "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins"
-    cp -a "$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins/." \
-      "$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins/"
+  if [ -d "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins" ]; then
+    mkdir -p "$$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins"
+    cp -a "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins/." \
+      "$$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins/"
   fi
 
-  [ -f "$ROOTFS_DIR/usr/lib/rpm/rpmrc" ] || die "RPM runtime is missing /usr/lib/rpm/rpmrc"
-  [ -f "$ROOTFS_DIR/usr/lib/rpm/macros" ] || die "RPM runtime is missing /usr/lib/rpm/macros"
+  [ -f "$$ROOTFS_DIR/usr/lib/rpm/rpmrc" ] || die "RPM runtime is missing /usr/lib/rpm/rpmrc"
+  [ -f "$$ROOTFS_DIR/usr/lib/rpm/macros" ] || die "RPM runtime is missing /usr/lib/rpm/macros"
 
-  mkdir -p "$ROOTFS_DIR/var/cache/libdnf5" "$ROOTFS_DIR/var/lib/rpm" "$ROOTFS_DIR/var/log"
+  if [ -d "$$SYSPCKG2_SYSROOT/etc/ssl" ]; then
+    mkdir -p "$$ROOTFS_DIR/etc/ssl"
+    cp -a "$$SYSPCKG2_SYSROOT/etc/ssl/." "$$ROOTFS_DIR/etc/ssl/"
+  fi
+  if [ -d "$$SYSPCKG2_SYSROOT/usr/share/ca-certificates" ]; then
+    mkdir -p "$$ROOTFS_DIR/usr/share/ca-certificates"
+    cp -a "$$SYSPCKG2_SYSROOT/usr/share/ca-certificates/." "$$ROOTFS_DIR/usr/share/ca-certificates/"
+  fi
+
+  mkdir -p \
+    "$$ROOTFS_DIR/var/cache/libdnf5" \
+    "$$ROOTFS_DIR/var/lib/dnf" \
+    "$$ROOTFS_DIR/var/lib/rpm" \
+    "$$ROOTFS_DIR/usr/lib/sysimage/libdnf5" \
+    "$$ROOTFS_DIR/var/log"
 }
 ensure_amd64_sysroot() {
   if [ -n "$$SYSPCKG_SYSROOT" ]; then
