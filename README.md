@@ -28,7 +28,7 @@ sudo apt install -y \
   cpio gzip xz-utils tar wget ca-certificates file \
   grub-pc-bin grub-efi-amd64-bin xorriso mtools \
   qemu-system-x86 ovmf \
-  gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+  gcc-x86-64-linux-gnu g++-x86-64-linux-gnu binutils-x86-64-linux-gnu
 ```
 
 Enable the `amd64` architecture once:
