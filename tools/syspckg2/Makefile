@@ -5,12 +5,15 @@ LDFLAGS ?=
 
 TARGET := syspckg2
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: $(TARGET)
 
 $(TARGET): main.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+test: $(TARGET)
+	sh tests/cli_test.sh
 
 clean:
 	rm -f $(TARGET)
