@@ -596,12 +596,10 @@ iso:
 	esac
 	mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg2"
 	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/libexec/syspckg2/syspckg2.real"
-	cat > "$$ROOTFS_DIR/usr/bin/syspckg2" <<'EOF'
-#!/bin/sh
-exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 \
-  --library-path /usr/lib/syspckg2 \
-  /usr/libexec/syspckg2/syspckg2.real "$$@"
-EOF
+	printf '%s\n' \
+	  '#!/bin/sh' \
+	  'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/syspckg2.real "$$@"' \
+	  > "$$ROOTFS_DIR/usr/bin/syspckg2"
 	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg2"
 	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
 	say "Copying runtime loader + libraries for SystemPackager 1 and private libdnf5 SystemPackager 2"
