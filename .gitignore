@@ -21,6 +21,9 @@
 !tools/syspckg/tests/list_*.sh
 !tools/syspckg/tests/missing_*.sh
 !tools/syspckg/tests/update_*.sh
+!tools/syspckg2/
+!tools/syspckg2/**
+tools/syspckg2/syspckg2
 !tests/
 !tests/**
 !desktop/
