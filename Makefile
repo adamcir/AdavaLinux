@@ -24,7 +24,7 @@ SYSPCKG2_BIN := $(SYSPCKG2_SRC_DIR)/syspckg2
 SYSPCKG2_BOOTSTRAP := $(SYSPCKG2_SRC_DIR)/bootstrap-libdnf5-sysroot.sh
 
 TARGET_ARCH ?= x86_64
-JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+JOBS ?= $(shell nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 CROSS_COMPILE ?=
 KERNEL_DEFCONFIG ?= defconfig
 SYSPCKG_SYSROOT ?=
@@ -75,6 +75,8 @@ OVMF_VARS_TEMPLATE ?= /usr/share/OVMF/OVMF_VARS_4M.fd
 QEMU ?= qemu-system-x86_64
 QEMU_IMG ?= qemu-img
 QEMU_UEFI_VIDEO ?= std
+QEMU_RAM ?= 2048M
+QEMU_CPUS ?= $(JOBS)
 
 .PHONY: all tools kernel busybox iso xfce run-bios run-uefi run-bios-install run-uefi-install run-bios-hdd run-uefi-hdd clean help
 
@@ -152,16 +154,16 @@ check_toolchain() {
 }
 kmake() {
   if [ -n "$$CROSS_COMPILE" ]; then
-    make -C "$$KERNEL_DIR" ARCH="$$KERNEL_ARCH" CROSS_COMPILE="$$CROSS_COMPILE" "$$@"
+    make -j"$JOBS" -C "$KERNEL_DIR" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" "$@"
   else
-    make -C "$$KERNEL_DIR" ARCH="$$KERNEL_ARCH" "$$@"
+    make -j"$JOBS" -C "$KERNEL_DIR" ARCH="$KERNEL_ARCH" "$@"
   fi
 }
 bbmake() {
   if [ -n "$$CROSS_COMPILE" ]; then
-    make -C "$$BUSYBOX_DIR" ARCH="$$BUSYBOX_ARCH" CROSS_COMPILE="$$CROSS_COMPILE" "$$@"
+    make -j"$JOBS" -C "$BUSYBOX_DIR" ARCH="$BUSYBOX_ARCH" CROSS_COMPILE="$CROSS_COMPILE" "$@"
   else
-    make -C "$$BUSYBOX_DIR" ARCH="$$BUSYBOX_ARCH" "$$@"
+    make -j"$JOBS" -C "$BUSYBOX_DIR" ARCH="$BUSYBOX_ARCH" "$@"
   fi
 }
 copy_one_lib() {
@@ -437,7 +439,8 @@ print_context() {
   say "Project:  $$PROJECT_DIR"
   say "Kernel:   $$KERNEL_DIR"
   say "BusyBox:  $$BUSYBOX_DIR"
-  say "Jobs:     $$JOBS"
+  say "Jobs:     $JOBS"
+  say "QEMU:     $(QEMU_CPUS) vCPU / $(QEMU_RAM) RAM"
   say "Host:     $$HOST_ARCH ($$HOST_UNAME)"
   say "Target:   $$TARGET_ARCH"
   say "Cross:    $${CROSS_COMPILE:-<native>}"
@@ -448,7 +451,7 @@ endef
 all: tools kernel busybox iso
 
 xfce:
-	"$(PROJECT_DIR)/../xfce/build-xfce.sh" --all
+	MAKEFLAGS="-j$(JOBS)" CMAKE_BUILD_PARALLEL_LEVEL="$(JOBS)" NINJAFLAGS="-j$(JOBS)" "$(PROJECT_DIR)/../xfce/build-xfce.sh" --all
 
 tools:
 	$(COMMON_SH)
@@ -460,13 +463,13 @@ tools:
 	  say "Building ncurses installer frontend"
 	  if [ -n "$$CROSS_COMPILE" ]; then
 	    ensure_amd64_ncurses
-	    make -C "$$INSTALLER_SRC_DIR" clean all \
+	    make -C "$INSTALLER_SRC_DIR" clean && make -j"$JOBS" -C "$INSTALLER_SRC_DIR" all \
 	      CC="$${CROSS_COMPILE}gcc" \
 	      CPPFLAGS="$$NCURSES_CPPFLAGS" \
 	      LDFLAGS="$$NCURSES_LDFLAGS" \
 	      LDLIBS="$$NCURSES_LDLIBS"
 	  else
-	    make -C "$$INSTALLER_SRC_DIR" clean all
+	    make -C "$INSTALLER_SRC_DIR" clean && make -j"$JOBS" -C "$INSTALLER_SRC_DIR" all
 	  fi
 	  mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
 	  cp -f "$$INSTALLER_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/installer"
@@ -477,9 +480,9 @@ tools:
 	[ -d "$$SYSPCKG_SRC_DIR" ] || die "tools/syspckg not found"
 	say "Building SystemPackager"
 	if [ -n "$$CROSS_COMPILE" ]; then
-	  make -C "$$SYSPCKG_SRC_DIR" clean all CC="$${CROSS_COMPILE}gcc"
+	  make -C "$SYSPCKG_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG_SRC_DIR" all CC="${CROSS_COMPILE}gcc"
 	else
-	  make -C "$$SYSPCKG_SRC_DIR" clean all
+	  make -C "$SYSPCKG_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG_SRC_DIR" all
 	fi
 	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
 	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
@@ -490,10 +493,10 @@ tools:
 	ensure_syspckg2_sysroot
 	if [ -n "$$CROSS_COMPILE" ]; then
 	  need_cmd "$${CROSS_COMPILE}g++"
-	  make -C "$$SYSPCKG2_SRC_DIR" clean all CXX="$${CROSS_COMPILE}g++" SYSROOT="$$SYSPCKG2_SYSROOT"
+	  make -C "$SYSPCKG2_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG2_SRC_DIR" all CXX="${CROSS_COMPILE}g++" SYSROOT="$SYSPCKG2_SYSROOT"
 	else
 	  need_cmd g++
-	  make -C "$$SYSPCKG2_SRC_DIR" clean all CXX="g++" SYSROOT="$$SYSPCKG2_SYSROOT"
+	  make -C "$SYSPCKG2_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG2_SRC_DIR" all CXX="g++" SYSROOT="$SYSPCKG2_SYSROOT"
 	fi
 	[ -x "$$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $$SYSPCKG2_BIN"
 	cp -f "$$SYSPCKG2_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
@@ -532,7 +535,7 @@ kernel:
 	  done < "$$KERNEL_CFG_FRAGMENT"
 	  kmake olddefconfig
 	fi
-	kmake -j"$$JOBS"
+	kmake
 	KERNEL_IMAGE="$$KERNEL_DIR/$$KERNEL_IMAGE_REL"
 	[ -f "$$KERNEL_IMAGE" ] || die "Kernel image not found: $$KERNEL_IMAGE"
 	cp -f "$$KERNEL_IMAGE" "$$OUT_DIR/$$OUT_KERNEL_NAME"
@@ -561,7 +564,7 @@ busybox:
 	  sed -i 's/^# CONFIG_SETSID is not set/CONFIG_SETSID=y/' "$$BUSYBOX_DIR/.config"
 	fi
 	bbmake oldconfig
-	bbmake -j"$$JOBS"
+	bbmake
 	[ -x "$$BUSYBOX_DIR/busybox" ] || die "BusyBox binary not found after build: $$BUSYBOX_DIR/busybox"
 	say "BusyBox built: $$BUSYBOX_DIR/busybox"
 
@@ -729,7 +732,7 @@ run-bios:
 	set -eu
 	command -v "$(QEMU)" >/dev/null 2>&1 || { printf "\nERROR: Missing command: $(QEMU)\n" >&2; exit 1; }
 	[ -f "$(ISO_OUT_BIOS)" ] || { printf "\nERROR: Missing BIOS ISO: $(ISO_OUT_BIOS). Run make iso first.\n" >&2; exit 1; }
-	"$(QEMU)" -cdrom "$(ISO_OUT_BIOS)" -m 1024M
+	"$(QEMU)" -cdrom "$(ISO_OUT_BIOS)" -m "$(QEMU_RAM)" -smp "$(QEMU_CPUS)"
 
 run-bios-install:
 	set -eu
@@ -742,7 +745,8 @@ run-bios-install:
 	fi
 	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
-	  -m 1024M \
+	  -m "$(QEMU_RAM)" \
+	  -smp "$(QEMU_CPUS)" \
 	  -drive file="$(BIOS_HDD_IMG)",format=qcow2 \
 	  -cdrom "$(ISO_OUT_BIOS)" \
 	  -boot d
@@ -756,7 +760,7 @@ run-bios-hdd:
 	  "$(QEMU_IMG)" create -f qcow2 "$(BIOS_HDD_IMG)" "$(HDD_SIZE)"
 	fi
 	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
-	"$(QEMU)" -m 1024M -drive file="$(BIOS_HDD_IMG)",format=qcow2
+	"$(QEMU)" -m "$(QEMU_RAM)" -smp "$(QEMU_CPUS)" -drive file="$(BIOS_HDD_IMG)",format=qcow2
 
 run-uefi:
 	set -eu
@@ -771,7 +775,8 @@ run-uefi:
 	"$(QEMU)" \
 	  -machine q35,accel=kvm \
       -cpu host \
-      -m 1024 \
+      -m "$(QEMU_RAM)" \
+      -smp "$(QEMU_CPUS)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
@@ -798,7 +803,8 @@ run-uefi-install:
 	"$(QEMU)" \
 	  -machine q35,accel=kvm \
       -cpu host \
-      -m 1024 \
+      -m "$(QEMU_RAM)" \
+      -smp "$(QEMU_CPUS)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
@@ -826,7 +832,8 @@ run-uefi-hdd:
 	"$(QEMU)" \
 	  -machine q35,accel=kvm \
       -cpu host \
-      -m 1024 \
+      -m "$(QEMU_RAM)" \
+      -smp "$(QEMU_CPUS)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
