@@ -3,6 +3,7 @@
 #include <libdnf5/base/transaction.hpp>
 #include <libdnf5/base/transaction_package.hpp>
 #include <libdnf5/common/sack/query_cmp.hpp>
+#include <libdnf5/logger/logger.hpp>
 #include <libdnf5/repo/download_callbacks.hpp>
 #include <libdnf5/repo/package_downloader.hpp>
 #include <libdnf5/repo/repo_query.hpp>
@@ -163,11 +164,15 @@ std::string make_percent_bar(int percent, int width = 28) {
 
 class MetadataActivity {
 public:
-    explicit MetadataActivity(const std::vector<std::string> & repositories)
-        : repositories_(repositories), total_(repositories.size()) {
+    MetadataActivity(
+        const std::vector<std::string> & repositories,
+        std::unordered_map<std::string, std::vector<std::string>> plans)
+        : repositories_(repositories), plans_(std::move(plans)), total_(repositories.size()) {
         for (const auto & repo_id : repositories_) {
             repo_progress_.emplace(repo_id, RepoProgress{});
         }
+
+        recalculate_processing_total();
 
         if (!interactive_terminal()) {
             log_info("Repository metadata: 0/" + std::to_string(total_) + " (0%)");
@@ -184,9 +189,18 @@ public:
                 double aggregate_total = 0.0;
                 double aggregate_downloaded = 0.0;
                 bool have_byte_progress = false;
+                std::size_t processed_items = 0;
+                std::size_t processing_total = 0;
+                bool processing = false;
+                std::string current_item;
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
+                    processing = processing_started_;
+                    processed_items = processed_items_.size();
+                    processing_total = processing_total_;
+                    current_item = current_processing_item_;
+
                     for (const auto & repo_id : repositories_) {
                         const auto it = repo_progress_.find(repo_id);
                         if (it == repo_progress_.end()) {
@@ -194,7 +208,7 @@ public:
                         }
 
                         const auto & state = it->second;
-                        if (state.total > 0.0) {
+                        if (!processing && state.total > 0.0) {
                             have_byte_progress = true;
                             aggregate_total += state.total;
                             aggregate_downloaded += std::min(state.downloaded, state.total);
@@ -202,38 +216,62 @@ public:
                             const int repo_percent = std::clamp(
                                 static_cast<int>((state.downloaded * 100.0) / state.total), 0, 100);
                             details.push_back(repo_id + " " + std::to_string(repo_percent) + "%");
-                        } else if (state.failed) {
+                        } else if (!processing && state.failed) {
                             details.push_back(repo_id + " FAILED");
-                        } else if (state.finished) {
+                        } else if (!processing && state.finished) {
                             details.push_back(repo_id + " 100%");
-                        } else {
+                        } else if (!processing) {
                             details.push_back(repo_id + " waiting");
+                        } else {
+                            const auto plan_it = plans_.find(repo_id);
+                            const std::size_t repo_total =
+                                plan_it == plans_.end() ? 0 : plan_it->second.size();
+                            const auto done_it = processed_per_repo_.find(repo_id);
+                            const std::size_t repo_done =
+                                done_it == processed_per_repo_.end() ? 0 : done_it->second;
+                            details.push_back(
+                                repo_id + " " + std::to_string(repo_done) + "/" +
+                                std::to_string(repo_total));
                         }
                     }
                 }
 
                 const auto done = completed_.load();
                 int percent = 0;
-                if (have_byte_progress && aggregate_total > 0.0) {
-                    percent = std::clamp(
-                        static_cast<int>((aggregate_downloaded * 100.0) / aggregate_total), 0, 100);
-                } else if (total_ > 0) {
-                    percent = static_cast<int>((done * 100U) / total_);
-                } else {
-                    percent = 100;
-                }
+                std::string phase;
 
-                std::string phase =
-                    (done >= total_ && total_ > 0)
-                        ? "Processing metadata / building solver cache"
-                        : "Repository metadata";
+                if (processing) {
+                    percent = processing_total == 0
+                        ? 100
+                        : std::clamp(
+                              static_cast<int>((processed_items * 100U) / processing_total), 0, 100);
+                    phase = "Processing metadata";
+                    if (!current_item.empty()) {
+                        phase += ": " + current_item;
+                    }
+                } else {
+                    if (have_byte_progress && aggregate_total > 0.0) {
+                        percent = std::clamp(
+                            static_cast<int>((aggregate_downloaded * 100.0) / aggregate_total), 0, 100);
+                    } else if (total_ > 0) {
+                        percent = static_cast<int>((done * 100U) / total_);
+                    } else {
+                        percent = 100;
+                    }
+                    phase = "Repository metadata";
+                }
 
                 std::ostringstream out;
                 out << COLOR_CYAN << frames[frame++ % 4] << COLOR_RESET << " "
                     << phase << " "
                     << COLOR_GREEN << "[" << make_percent_bar(percent) << "]" << COLOR_RESET << " "
-                    << std::setw(3) << percent << "%  "
-                    << done << "/" << total_;
+                    << std::setw(3) << percent << "%";
+
+                if (processing) {
+                    out << "  " << processed_items << "/" << processing_total;
+                } else {
+                    out << "  " << done << "/" << total_;
+                }
 
                 if (!details.empty()) {
                     out << "  {";
@@ -297,6 +335,54 @@ public:
         }
     }
 
+    void processing_item(const std::string & repo_id, const std::string & item) {
+        std::size_t index = 0;
+        std::size_t repo_total = 0;
+        bool newly_processed = false;
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            processing_started_ = true;
+
+            auto & plan = plans_[repo_id];
+            auto it = std::find(plan.begin(), plan.end(), item);
+            if (it == plan.end()) {
+                plan.push_back(item);
+                recalculate_processing_total_locked();
+                it = std::prev(plan.end());
+            }
+
+            index = static_cast<std::size_t>(std::distance(plan.begin(), it)) + 1;
+            repo_total = plan.size();
+            current_processing_item_ = repo_id + "/" + item;
+
+            const std::string key = repo_id + "\n" + item;
+            if (processed_items_.insert(key).second) {
+                ++processed_per_repo_[repo_id];
+                newly_processed = true;
+            }
+        }
+
+        if (newly_processed) {
+            log_info(
+                "[" + repo_id + "] processing metadata " +
+                std::to_string(index) + "/" + std::to_string(repo_total) +
+                ": " + item);
+        }
+    }
+
+    void finish_processing() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        processing_started_ = true;
+        for (const auto & [repo_id, items] : plans_) {
+            for (const auto & item : items) {
+                processed_items_.insert(repo_id + "\n" + item);
+            }
+            processed_per_repo_[repo_id] = items.size();
+        }
+        current_processing_item_.clear();
+    }
+
     void stop() {
         if (!running_.exchange(false)) {
             return;
@@ -317,14 +403,90 @@ private:
         bool failed{false};
     };
 
+    void recalculate_processing_total() {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        recalculate_processing_total_locked();
+    }
+
+    void recalculate_processing_total_locked() {
+        processing_total_ = 0;
+        for (const auto & [repo_id, items] : plans_) {
+            (void)repo_id;
+            processing_total_ += items.size();
+        }
+    }
+
     std::vector<std::string> repositories_;
+    std::unordered_map<std::string, std::vector<std::string>> plans_;
     const std::size_t total_;
     std::atomic<std::size_t> completed_{0};
     std::atomic<bool> running_{false};
+
     std::mutex state_mutex_;
     std::unordered_map<std::string, RepoProgress> repo_progress_;
+    bool processing_started_{false};
+    std::size_t processing_total_{0};
+    std::set<std::string> processed_items_;
+    std::unordered_map<std::string, std::size_t> processed_per_repo_;
+    std::string current_processing_item_;
+
     std::thread worker_;
 };
+
+class SyspckgLogger : public libdnf5::Logger {
+public:
+    void set_metadata_activity(MetadataActivity * activity) noexcept {
+        metadata_activity_.store(activity);
+    }
+
+    void write(
+        [[maybe_unused]] const std::chrono::time_point<std::chrono::system_clock> & time,
+        [[maybe_unused]] pid_t pid,
+        [[maybe_unused]] Level level,
+        const std::string & message) noexcept override {
+        auto * activity = metadata_activity_.load();
+        if (!activity) {
+            return;
+        }
+
+        try {
+            constexpr std::string_view main_prefix = "Loading repomd and primary for repo \"";
+            if (message.starts_with(main_prefix)) {
+                const auto repo_start = main_prefix.size();
+                const auto repo_end = message.find('"', repo_start);
+                if (repo_end != std::string::npos) {
+                    const auto repo_id = message.substr(repo_start, repo_end - repo_start);
+                    activity->processing_item(repo_id, "repomd.xml");
+                    activity->processing_item(repo_id, "primary");
+                }
+                return;
+            }
+
+            constexpr std::string_view ext_prefix = "Loading ";
+            constexpr std::string_view ext_marker = " extension for repo \"";
+            if (message.starts_with(ext_prefix)) {
+                const auto marker_pos = message.find(ext_marker);
+                if (marker_pos != std::string::npos) {
+                    const auto item =
+                        message.substr(ext_prefix.size(), marker_pos - ext_prefix.size());
+                    const auto repo_start = marker_pos + ext_marker.size();
+                    const auto repo_end = message.find('"', repo_start);
+                    if (repo_end != std::string::npos) {
+                        const auto repo_id = message.substr(repo_start, repo_end - repo_start);
+                        activity->processing_item(repo_id, item);
+                    }
+                }
+            }
+        } catch (...) {
+            // Logging must never break package management.
+        }
+    }
+
+private:
+    std::atomic<MetadataActivity *> metadata_activity_{nullptr};
+};
+
+SyspckgLogger * ui_logger = nullptr;
 
 std::string format_bytes(double bytes) {
     if (bytes <= 0.0) {
@@ -545,6 +707,11 @@ private:
                     if (metadata_activity_) {
                         metadata_activity_->repository_finished(result_key, true);
                     }
+                } else if (state && state->archive_total > 0) {
+                    log_ok(
+                        "Archive " + std::to_string(state->archive_index) + "/" +
+                        std::to_string(state->archive_total) +
+                        " fetched: " + description);
                 } else {
                     log_ok("Fetch complete: " + description);
                 }
@@ -851,6 +1018,7 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
     std::vector<std::string> enabled_repo_ids;
     std::list<RepoFetchContext> repo_fetch_contexts;
+    std::unordered_map<std::string, std::vector<std::string>> metadata_plans;
     {
         libdnf5::repo::RepoQuery repos(base);
         for (auto repo : repos) {
@@ -880,6 +1048,7 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
                 metadata_items.emplace_back("comps");
             }
 
+            metadata_plans.emplace(repo_id, metadata_items);
             repo_fetch_contexts.emplace_back(repo_id, std::move(metadata_items));
             repo->set_user_data(&repo_fetch_contexts.back());
 
@@ -911,7 +1080,11 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         throw std::runtime_error("No enabled package repositories");
     }
 
-    MetadataActivity metadata_activity(enabled_repo_ids);
+    MetadataActivity metadata_activity(enabled_repo_ids, std::move(metadata_plans));
+    if (ui_logger) {
+        ui_logger->set_metadata_activity(&metadata_activity);
+    }
+
     auto download_callbacks = std::make_unique<VerboseDownloadCallbacks>(&metadata_activity);
     auto * download_callbacks_ptr = download_callbacks.get();
     base.set_download_callbacks(std::move(download_callbacks));
@@ -922,6 +1095,10 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
     const auto repo_load_started = std::chrono::steady_clock::now();
     repo_sack->load_repos();
+    metadata_activity.finish_processing();
+    if (ui_logger) {
+        ui_logger->set_metadata_activity(nullptr);
+    }
     metadata_activity.stop();
     log_ok(
         "Repository metadata processed in " +
@@ -1348,7 +1525,11 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        libdnf5::Base base;
+        std::vector<std::unique_ptr<libdnf5::Logger>> loggers;
+        auto logger = std::make_unique<SyspckgLogger>();
+        ui_logger = logger.get();
+        loggers.emplace_back(std::move(logger));
+        libdnf5::Base base(std::move(loggers));
 
         if (opts.command == "clean") {
             prepare_base(base, opts.source, false, false);
