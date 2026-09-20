@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+version="1.0"
+if [ -r /etc/os-release ]; then
+    detected="$(sed -n 's/^VERSION_ID=//p' /etc/os-release | head -n 1 | tr -d '"')"
+    [ -n "$detected" ] && version="$detected"
+fi
+
+cmdline=""
+if [ -r /etc/default/grub ]; then
+    # shellcheck disable=SC1091
+    . /etc/default/grub
+    cmdline="${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}"
+fi
+
+cat <<EOF
+menuentry 'AdavaLinux v${version}' {
+    linux /boot/vmlinuz ${cmdline}
+    initrd /boot/initramfs-disk.gz
+}
+EOF
