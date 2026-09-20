@@ -303,13 +303,13 @@ static int install_grub_pkg(const char *pkg, const char *target_root, InstallerL
              target_install ? " in target root" : "");
 
     if (target_install) {
-        char *argv[7];
+        char *argv[9];
         installer_build_syspckg_root_install_argv(argv, pkg, target_root);
         return run_checked(argv, log_fn, ctx);
     }
 
     {
-        char *argv[5];
+        char *argv[7];
         installer_build_syspckg_install_argv(argv, pkg);
         return run_checked(argv, log_fn, ctx);
     }
@@ -617,7 +617,12 @@ int installer_run_install(const InstallerConfig *cfg,
 
     if (cfg->action == INSTALLER_ACTION_INSTALL) {
         step(progress_fn, ctx, 18, "Installing GRUB package");
-        if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", NULL, log_fn, ctx) != 0) {
+        if (boot_uefi) {
+            if (install_grub_pkg("grub2-efi-x64", NULL, log_fn, ctx) != 0 ||
+                install_grub_pkg("grub2-efi-x64-modules", NULL, log_fn, ctx) != 0) {
+                return 1;
+            }
+        } else if (install_grub_pkg("grub2-pc", NULL, log_fn, ctx) != 0) {
             return 1;
         }
     }
@@ -727,12 +732,17 @@ int installer_run_install(const InstallerConfig *cfg,
     }
 
     step(progress_fn, ctx, 72, "Installing target GRUB package");
-    if (install_grub_pkg(boot_uefi ? "grub-efi" : "grub-bios", ROOT_MNT, log_fn, ctx) != 0) {
+    if (boot_uefi) {
+        if (install_grub_pkg("grub2-efi-x64", ROOT_MNT, log_fn, ctx) != 0 ||
+            install_grub_pkg("grub2-efi-x64-modules", ROOT_MNT, log_fn, ctx) != 0) {
+            return 1;
+        }
+    } else if (install_grub_pkg("grub2-pc", ROOT_MNT, log_fn, ctx) != 0) {
         return 1;
     }
     if (installer_build_copy_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
         shell_checked(cmd, log_fn, ctx) != 0) {
-        emit_log(log_fn, ctx, "Failed to copy grub-mkconfig into target root");
+        emit_log(log_fn, ctx, "Failed to copy grub2-mkconfig into target root");
         return 1;
     }
     if (installer_build_syspckg_state_cleanup_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
@@ -778,7 +788,7 @@ int installer_run_install(const InstallerConfig *cfg,
         shell_checked(cmd, log_fn, ctx) != 0 ||
         installer_build_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
         shell_checked(cmd, log_fn, ctx) != 0) {
-        emit_log(log_fn, ctx, "Failed to run grub-mkconfig");
+        emit_log(log_fn, ctx, "Failed to run grub2-mkconfig");
         installer_safe_umount(ROOT_MNT "/sys", log_fn, ctx);
         installer_safe_umount(ROOT_MNT "/proc", log_fn, ctx);
         installer_safe_umount(ROOT_MNT "/dev", log_fn, ctx);
@@ -792,7 +802,7 @@ int installer_run_install(const InstallerConfig *cfg,
         char grub_dir[PATH_MAX];
         char dir_arg[PATH_MAX + 16];
         char *const grub_efi[] = {
-            "grub-install",
+            "grub2-install",
             dir_arg,
             "--target=x86_64-efi",
             "--efi-directory=" ROOT_MNT "/boot/efi",
@@ -821,7 +831,7 @@ int installer_run_install(const InstallerConfig *cfg,
         char grub_dir[PATH_MAX];
         char dir_arg[PATH_MAX + 16];
         char *const grub_bios[] = {
-            "grub-install",
+            "grub2-install",
             dir_arg,
             "--target=i386-pc",
             "--boot-directory=" ROOT_MNT "/boot",
