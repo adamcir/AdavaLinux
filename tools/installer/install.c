@@ -647,7 +647,14 @@ int installer_run_install(const InstallerConfig *cfg,
                 return 1;
             }
         }
-        step(progress_fn, ctx, 98, "Syncing and unmounting");
+        if (installer_build_grub_compat_config_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
+        emit_log(log_fn, ctx, "Failed to preserve final GRUB config after grub2-install");
+        return 1;
+    }
+    emit_log(log_fn, ctx, "Final GRUB config synchronized for grub2 and grub prefixes");
+
+    step(progress_fn, ctx, 98, "Syncing and unmounting");
         {
             char *const sync_cmd[] = { "sync", NULL };
             (void)installer_run_command(sync_cmd, log_fn, ctx);
