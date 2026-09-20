@@ -253,7 +253,6 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
         "/lib/grub",
         "/lib64/grub",
         ROOT_MNT "/boot/grub2",
-        ROOT_MNT "/boot/grub2",
         ROOT_MNT "/boot/grub",
         ROOT_MNT "/usr/lib/grub",
         ROOT_MNT "/usr/lib64/grub",
