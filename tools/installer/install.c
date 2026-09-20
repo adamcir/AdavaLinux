@@ -841,6 +841,16 @@ int installer_run_install(const InstallerConfig *cfg,
         installer_safe_umount(ROOT_MNT "/dev", log_fn, ctx);
         return 1;
     }
+    if (installer_build_grub_compat_config_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
+        shell_checked(cmd, log_fn, ctx) != 0) {
+        emit_log(log_fn, ctx, "Failed to create GRUB compatibility config");
+        return 1;
+    }
+    if (shell_checked("grep -q '^menuentry ' " ROOT_MNT "/boot/grub2/grub.cfg", log_fn, ctx) != 0) {
+        emit_log(log_fn, ctx, "Generated GRUB config contains no AdavaLinux menuentry");
+        return 1;
+    }
+    emit_log(log_fn, ctx, "GRUB config ready in /boot/grub2/grub.cfg and /boot/grub/grub.cfg");
 
     step(progress_fn, ctx, 94, "Installing bootloader");
     if (boot_uefi) {
