@@ -1536,6 +1536,29 @@ void activate_fedora_runtime() {
     }
 
     log_ok("Fedora-compatible system dynamic loader activated");
+
+    const std::filesystem::path fedora_bash{"/usr/bin/bash"};
+    if (std::filesystem::exists(fedora_bash)) {
+        for (const auto & shell_path : {
+                 std::filesystem::path{"/bin/sh"},
+                 std::filesystem::path{"/bin/bash"}}) {
+            ec.clear();
+            if (std::filesystem::exists(shell_path) || std::filesystem::is_symlink(shell_path)) {
+                std::filesystem::remove(shell_path, ec);
+                ec.clear();
+            }
+            std::filesystem::create_symlink("../usr/bin/bash", shell_path, ec);
+            if (ec) {
+                log_warn(
+                    "Unable to point " + shell_path.string() +
+                    " to Fedora bash: " + ec.message());
+                ec.clear();
+            }
+        }
+        log_ok("Fedora bash activated for future RPM scriptlets");
+    } else {
+        log_warn("Fedora bash is missing after bootstrap; keeping BusyBox shell");
+    }
 }
 
 int run_bootstrap_command(const std::string & label, const std::string & command) {
