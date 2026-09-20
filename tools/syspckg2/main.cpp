@@ -1124,7 +1124,16 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         libdnf5::utils::LockBlocking::BLOCKING);
 
     const auto repo_load_started = std::chrono::steady_clock::now();
-    repo_sack->load_repos();
+    try {
+        repo_sack->load_repos();
+    } catch (...) {
+        if (ui_logger) {
+            ui_logger->set_metadata_activity(nullptr);
+        }
+        metadata_activity.stop();
+        throw;
+    }
+
     metadata_activity.finish_processing();
     if (ui_logger) {
         ui_logger->set_metadata_activity(nullptr);
