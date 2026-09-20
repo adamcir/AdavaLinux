@@ -1,22 +1,84 @@
 #!/bin/sh
-set -e
+set -eu
+
+prefix="${ADAVALINUX_ROOT:-}"
+if [ -n "$prefix" ]; then
+    prefix="${prefix%/}"
+fi
 
 version="1.0"
-if [ -r /etc/os-release ]; then
-    detected="$(sed -n 's/^VERSION_ID=//p' /etc/os-release | head -n 1 | tr -d '"')"
+if [ -r "$prefix/etc/os-release" ]; then
+    detected="$(sed -n 's/^VERSION=//p; s/^VERSION_ID=//p' "$prefix/etc/os-release" | head -n 1 | tr -d '"')"
     [ -n "$detected" ] && version="$detected"
 fi
 
-cmdline=""
-if [ -r /etc/default/grub ]; then
-    # shellcheck disable=SC1091
-    . /etc/default/grub
-    cmdline="${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}"
+cmdline="rootwait rw"
+if [ -r "$prefix/etc/default/grub" ]; then
+    grub_cmdline="$(sed -n 's/^GRUB_CMDLINE_LINUX=//p' "$prefix/etc/default/grub" | head -n 1 | tr -d '"')"
+    grub_default="$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT=//p' "$prefix/etc/default/grub" | head -n 1 | tr -d '"')"
+    cmdline="$(printf '%s %s\n' "$grub_cmdline" "$grub_default" | awk '{$1=$1; print}')"
 fi
 
-cat <<EOF
-menuentry 'AdavaLinux v${version}' {
-    linux /boot/vmlinuz ${cmdline}
-    initrd /boot/initramfs-disk.gz
+versions="$(
+    find "$prefix/boot" -maxdepth 1 -type f -name 'vmlinuz-*' 2>/dev/null |
+    sed 's|.*/vmlinuz-||' |
+    sort -Vr
+)"
+
+[ -n "$versions" ] || exit 0
+
+latest="$(printf '%s\n' "$versions" | sed -n '1p')"
+debug_args="$(printf '%s\n' "$cmdline" | awk '{out=""; for (i=1; i<=NF; i++) if ($i != "quiet") out = out (out ? " " : "") $i; print out}')"
+acpi_args="$(printf '%s acpi=off noapic nolapic irqpoll pci=nomsi\n' "$cmdline" | awk '{$1=$1; print}')"
+acpi_debug_args="$(printf '%s acpi=off noapic nolapic irqpoll pci=nomsi\n' "$debug_args" | awk '{$1=$1; print}')"
+
+emit_entry() {
+    kernel="$1"
+    title="$2"
+    args="$3"
+    initrd="/boot/initramfs-disk.gz"
+    if [ -f "$prefix/boot/initramfs-disk-$kernel.gz" ]; then
+        initrd="/boot/initramfs-disk-$kernel.gz"
+    fi
+    cat <<ENTRY
+menuentry "$title" {
+    echo 'Loading Linux ...'
+    linux /boot/vmlinuz-$kernel $args
+    echo 'Loading initramfs...'
+    initrd $initrd
 }
-EOF
+ENTRY
+}
+
+emit_entry "$latest" "AdavaLinux v$version" "$cmdline"
+emit_entry "$latest" "AdavaLinux v$version (debug)" "$debug_args"
+emit_entry "$latest" "AdavaLinux v$version (acpi off = ideal for old computers)" "$acpi_args"
+emit_entry "$latest" "AdavaLinux v$version (acpi off + debug)" "$acpi_debug_args"
+
+cat <<MENU
+submenu "Advanced options for AdavaLinux v$version" {
+MENU
+printf '%s\n' "$versions" | while IFS= read -r kernel; do
+    [ -n "$kernel" ] || continue
+    emit_entry "$kernel" "AdavaLinux v$version, kernel-$kernel" "$cmdline" | sed 's/^/    /'
+    emit_entry "$kernel" "AdavaLinux v$version, kernel-$kernel (debug)" "$debug_args" | sed 's/^/    /'
+done
+cat <<'MENU'
+}
+
+if [ "$grub_platform" = "pc" ]; then
+    if [ -f /boot/memtest86+.bin ]; then
+        menuentry "Memtest86+ (BIOS)" {
+            linux16 /boot/memtest86+.bin
+        }
+    fi
+fi
+
+if [ "$grub_platform" = "efi" ]; then
+    if [ -f /boot/memtest86+x64.efi ]; then
+        menuentry "Memtest86+ (UEFI)" {
+            linux /boot/memtest86+x64.efi
+        }
+    fi
+fi
+MENU
