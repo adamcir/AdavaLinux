@@ -154,16 +154,16 @@ check_toolchain() {
 }
 kmake() {
   if [ -n "$$CROSS_COMPILE" ]; then
-    make -j"$JOBS" -C "$KERNEL_DIR" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" "$@"
+    make -j"$$JOBS" -C "$$KERNEL_DIR" ARCH="$$KERNEL_ARCH" CROSS_COMPILE="$$CROSS_COMPILE" "$$@"
   else
-    make -j"$JOBS" -C "$KERNEL_DIR" ARCH="$KERNEL_ARCH" "$@"
+    make -j"$$JOBS" -C "$$KERNEL_DIR" ARCH="$$KERNEL_ARCH" "$$@"
   fi
 }
 bbmake() {
   if [ -n "$$CROSS_COMPILE" ]; then
-    make -j"$JOBS" -C "$BUSYBOX_DIR" ARCH="$BUSYBOX_ARCH" CROSS_COMPILE="$CROSS_COMPILE" "$@"
+    make -j"$$JOBS" -C "$$BUSYBOX_DIR" ARCH="$$BUSYBOX_ARCH" CROSS_COMPILE="$$CROSS_COMPILE" "$$@"
   else
-    make -j"$JOBS" -C "$BUSYBOX_DIR" ARCH="$BUSYBOX_ARCH" "$@"
+    make -j"$$JOBS" -C "$$BUSYBOX_DIR" ARCH="$$BUSYBOX_ARCH" "$$@"
   fi
 }
 copy_one_lib() {
@@ -439,7 +439,7 @@ print_context() {
   say "Project:  $$PROJECT_DIR"
   say "Kernel:   $$KERNEL_DIR"
   say "BusyBox:  $$BUSYBOX_DIR"
-  say "Jobs:     $JOBS"
+  say "Jobs:     $$JOBS"
   say "QEMU:     $(QEMU_CPUS) vCPU / $(QEMU_RAM) RAM"
   say "Host:     $$HOST_ARCH ($$HOST_UNAME)"
   say "Target:   $$TARGET_ARCH"
@@ -463,13 +463,13 @@ tools:
 	  say "Building ncurses installer frontend"
 	  if [ -n "$$CROSS_COMPILE" ]; then
 	    ensure_amd64_ncurses
-	    make -C "$INSTALLER_SRC_DIR" clean && make -j"$JOBS" -C "$INSTALLER_SRC_DIR" all \
+	    make -C "$$INSTALLER_SRC_DIR" clean && make -j"$$JOBS" -C "$$INSTALLER_SRC_DIR" all \
 	      CC="$${CROSS_COMPILE}gcc" \
 	      CPPFLAGS="$$NCURSES_CPPFLAGS" \
 	      LDFLAGS="$$NCURSES_LDFLAGS" \
 	      LDLIBS="$$NCURSES_LDLIBS"
 	  else
-	    make -C "$INSTALLER_SRC_DIR" clean && make -j"$JOBS" -C "$INSTALLER_SRC_DIR" all
+	    make -C "$$INSTALLER_SRC_DIR" clean && make -j"$$JOBS" -C "$$INSTALLER_SRC_DIR" all
 	  fi
 	  mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
 	  cp -f "$$INSTALLER_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/installer"
@@ -480,9 +480,9 @@ tools:
 	[ -d "$$SYSPCKG_SRC_DIR" ] || die "tools/syspckg not found"
 	say "Building SystemPackager"
 	if [ -n "$$CROSS_COMPILE" ]; then
-	  make -C "$SYSPCKG_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG_SRC_DIR" all CC="${CROSS_COMPILE}gcc"
+	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all CC="$${CROSS_COMPILE}gcc"
 	else
-	  make -C "$SYSPCKG_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG_SRC_DIR" all
+	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all
 	fi
 	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
 	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
@@ -493,10 +493,10 @@ tools:
 	ensure_syspckg2_sysroot
 	if [ -n "$$CROSS_COMPILE" ]; then
 	  need_cmd "$${CROSS_COMPILE}g++"
-	  make -C "$SYSPCKG2_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG2_SRC_DIR" all CXX="${CROSS_COMPILE}g++" SYSROOT="$SYSPCKG2_SYSROOT"
+	  make -C "$$SYSPCKG2_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG2_SRC_DIR" all CXX="$${CROSS_COMPILE}g++" SYSROOT="$$SYSPCKG2_SYSROOT"
 	else
 	  need_cmd g++
-	  make -C "$SYSPCKG2_SRC_DIR" clean && make -j"$JOBS" -C "$SYSPCKG2_SRC_DIR" all CXX="g++" SYSROOT="$SYSPCKG2_SYSROOT"
+	  make -C "$$SYSPCKG2_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG2_SRC_DIR" all CXX="g++" SYSROOT="$$SYSPCKG2_SYSROOT"
 	fi
 	[ -x "$$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $$SYSPCKG2_BIN"
 	cp -f "$$SYSPCKG2_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
