@@ -24,4 +24,15 @@ test "$(grep -n 'menuentry "AdavaLinux v1.0 (acpi off + debug)"' "$grub_cfg" | c
 test "$(grep -n 'menuentry "AdavaLinux v1.0 (acpi off + debug)"' "$grub_cfg" | cut -d: -f1)" -lt \
   "$(grep -n 'menuentry "Memtest86+ (UEFI)"' "$grub_cfg" | cut -d: -f1)"
 
+installed_grub="$repo_dir/filesforlinux/rootfs/etc/grub.d/10_adavalinux"
+
+grep -Fq 'submenu "Advanced options for AdavaLinux v$version"' "$installed_grub"
+grep -Fq 'AdavaLinux v$version (debug)' "$installed_grub"
+grep -Fq 'AdavaLinux v$version (acpi off = ideal for old computers)' "$installed_grub"
+grep -Fq 'AdavaLinux v$version (acpi off + debug)' "$installed_grub"
+grep -Fq 'menuentry "Memtest86+ (BIOS)"' "$installed_grub"
+grep -Fq 'menuentry "Memtest86+ (UEFI)"' "$installed_grub"
+grep -Fq 'linux16 /boot/memtest86+.bin' "$installed_grub"
+grep -Fq 'linux /boot/memtest86+x64.efi' "$installed_grub"
+
 printf '%s\n' 'Memtest86+ boot entries test passed'
