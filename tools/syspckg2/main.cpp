@@ -1424,6 +1424,120 @@ void restore_tsflags(libdnf5::Base & base, const std::vector<std::string> & orig
     base.get_config().get_tsflags_option().set(libdnf5::Option::Priority::RUNTIME, values);
 }
 
+const std::vector<std::string> & adavalinux_core_files() {
+    static const std::vector<std::string> files{
+        "/etc/os-release",
+        "/etc/passwd",
+        "/etc/group",
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/etc/profile",
+        "/etc/inittab",
+        "/etc/motd",
+    };
+    return files;
+}
+
+void backup_adavalinux_core_files() {
+    const std::filesystem::path backup_root{"/var/lib/syspckg2/bootstrap-backup"};
+    std::error_code ec;
+    std::filesystem::remove_all(backup_root, ec);
+    ec.clear();
+    std::filesystem::create_directories(backup_root, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to create AdavaLinux bootstrap backup: " + ec.message());
+    }
+
+    for (const auto & file_name : adavalinux_core_files()) {
+        const std::filesystem::path source{file_name};
+        if (!std::filesystem::exists(source)) {
+            continue;
+        }
+
+        auto relative = source.relative_path();
+        const auto destination = backup_root / relative;
+        std::filesystem::create_directories(destination.parent_path(), ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to prepare bootstrap backup path: " + ec.message());
+        }
+
+        std::filesystem::copy_file(
+            source,
+            destination,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to back up " + source.string() + ": " + ec.message());
+        }
+    }
+
+    log_ok("AdavaLinux identity and account files backed up");
+}
+
+void restore_adavalinux_core_files() {
+    const std::filesystem::path backup_root{"/var/lib/syspckg2/bootstrap-backup"};
+    std::error_code ec;
+
+    for (const auto & file_name : adavalinux_core_files()) {
+        const std::filesystem::path destination{file_name};
+        const auto source = backup_root / destination.relative_path();
+        if (!std::filesystem::exists(source)) {
+            continue;
+        }
+
+        std::filesystem::create_directories(destination.parent_path(), ec);
+        ec.clear();
+        std::filesystem::copy_file(
+            source,
+            destination,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+        if (ec) {
+            log_warn(
+                "Unable to restore " + destination.string() + ": " + ec.message());
+            ec.clear();
+        }
+    }
+
+    log_ok("AdavaLinux identity and account files restored");
+}
+
+void activate_fedora_runtime() {
+    const std::filesystem::path fedora_loader{"/usr/lib64/ld-linux-x86-64.so.2"};
+    const std::filesystem::path system_loader{"/lib64/ld-linux-x86-64.so.2"};
+
+    if (!std::filesystem::exists(fedora_loader)) {
+        throw std::runtime_error(
+            "Fedora bootstrap completed without " + fedora_loader.string());
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(system_loader.parent_path(), ec);
+    ec.clear();
+
+    if (std::filesystem::exists(system_loader) || std::filesystem::is_symlink(system_loader)) {
+        std::filesystem::remove(system_loader, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to replace system dynamic loader: " + ec.message());
+        }
+    }
+
+    std::filesystem::create_symlink(
+        "../usr/lib64/ld-linux-x86-64.so.2",
+        system_loader,
+        ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to activate Fedora dynamic loader: " + ec.message());
+    }
+
+    log_ok("Fedora-compatible system dynamic loader activated");
+}
+
 int run_bootstrap_command(const std::string & label, const std::string & command) {
     log_info(label + "...");
     const int rc = std::system(command.c_str());
@@ -1437,6 +1551,9 @@ int run_bootstrap_command(const std::string & label, const std::string & command
 
 void finalize_fedora_bootstrap() {
     log_info("Finalizing Fedora-compatible base...");
+
+    restore_adavalinux_core_files();
+    activate_fedora_runtime();
 
     std::error_code ec;
     std::filesystem::create_directories("/var/lib/syspckg2", ec);
@@ -1590,6 +1707,7 @@ int run_goal(
         log_warn(
             "First Fedora RPM transaction detected; using AdavaLinux bootstrap mode "
             "(scriptlets/triggers disabled for the initial base only)");
+        backup_adavalinux_core_files();
         set_bootstrap_tsflags(base);
     }
 
@@ -1689,6 +1807,9 @@ int run_goal(
             elapsed_string(std::chrono::steady_clock::now() - transaction_started));
 
         if (result != libdnf5::base::Transaction::TransactionRunResult::SUCCESS) {
+            if (bootstrap_mode) {
+                restore_adavalinux_core_files();
+            }
             log_err(libdnf5::base::Transaction::transaction_result_to_string(result));
             print_rpm_failure_details(transaction);
             return 3;
@@ -1701,6 +1822,12 @@ int run_goal(
         if (bootstrap_mode) {
             try {
                 restore_tsflags(base, original_tsflags);
+            } catch (...) {
+            }
+        }
+        if (bootstrap_mode) {
+            try {
+                restore_adavalinux_core_files();
             } catch (...) {
             }
         }
