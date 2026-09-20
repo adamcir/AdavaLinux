@@ -149,6 +149,109 @@ private:
     std::thread worker_;
 };
 
+std::string make_percent_bar(int percent, int width = 28) {
+    percent = std::clamp(percent, 0, 100);
+    const int filled = (percent * width) / 100;
+
+    std::string bar;
+    bar.reserve(static_cast<std::size_t>(width));
+    for (int i = 0; i < width; ++i) {
+        bar += i < filled ? '#' : '-';
+    }
+    return bar;
+}
+
+class MetadataActivity {
+public:
+    explicit MetadataActivity(std::size_t total_repositories) : total_(total_repositories) {
+        if (!interactive_terminal()) {
+            log_info(
+                "Repository metadata: 0/" + std::to_string(total_) + " (0%)");
+            return;
+        }
+
+        running_.store(true);
+        worker_ = std::thread([this]() {
+            static constexpr char frames[] = {'|', '/', '-', '\\'};
+            std::size_t frame = 0;
+
+            while (running_.load()) {
+                const auto done = completed_.load();
+                const int percent = total_ == 0
+                    ? 100
+                    : static_cast<int>((done * 100U) / total_);
+
+                std::string phase;
+                if (done >= total_ && total_ > 0) {
+                    phase = "Processing metadata / building solver cache";
+                } else {
+                    phase = "Repository metadata";
+                }
+
+                std::ostringstream out;
+                out << COLOR_CYAN << frames[frame++ % 4] << COLOR_RESET << " "
+                    << phase << " "
+                    << COLOR_GREEN << "[" << make_percent_bar(percent) << "]" << COLOR_RESET << " "
+                    << std::setw(3) << percent << "%  "
+                    << done << "/" << total_;
+
+                render_status_line(out.str());
+                std::this_thread::sleep_for(std::chrono::milliseconds(180));
+            }
+        });
+    }
+
+    MetadataActivity(const MetadataActivity &) = delete;
+    MetadataActivity & operator=(const MetadataActivity &) = delete;
+
+    ~MetadataActivity() {
+        stop();
+    }
+
+    void repository_finished(const std::string & repo_id) {
+        bool inserted = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            inserted = finished_repositories_.insert(repo_id).second;
+        }
+        if (!inserted) {
+            return;
+        }
+
+        const auto done = ++completed_;
+        const int percent = total_ == 0
+            ? 100
+            : static_cast<int>((done * 100U) / total_);
+
+        if (!interactive_terminal()) {
+            log_info(
+                "Repository metadata [" + make_percent_bar(percent) + "] " +
+                std::to_string(percent) + "%  " +
+                std::to_string(done) + "/" + std::to_string(total_));
+        }
+    }
+
+    void stop() {
+        if (!running_.exchange(false)) {
+            return;
+        }
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+
+        std::lock_guard<std::mutex> lock(console_mutex);
+        clear_status_line_locked();
+    }
+
+private:
+    const std::size_t total_;
+    std::atomic<std::size_t> completed_{0};
+    std::atomic<bool> running_{false};
+    std::mutex state_mutex_;
+    std::set<std::string> finished_repositories_;
+    std::thread worker_;
+};
+
 std::string format_bytes(double bytes) {
     if (bytes <= 0.0) {
         return "unknown size";
@@ -172,6 +275,9 @@ struct RepoFetchContext {
 
 class VerboseDownloadCallbacks : public libdnf5::repo::DownloadCallbacks {
 public:
+    explicit VerboseDownloadCallbacks(MetadataActivity * metadata_activity = nullptr)
+        : metadata_activity_(metadata_activity) {}
+
     struct Result {
         std::size_t successful{0};
         std::size_t failed{0};
@@ -194,18 +300,10 @@ private:
     };
 
     std::string progress_bar(const DownloadState & state, double downloaded, double total_to_download) const {
-        static constexpr int width = 28;
         int percent = total_to_download > 0.0
             ? static_cast<int>((downloaded * 100.0) / total_to_download)
             : 0;
         percent = std::clamp(percent, 0, 100);
-        const int filled = (percent * width) / 100;
-
-        std::string bar;
-        bar.reserve(width);
-        for (int i = 0; i < width; ++i) {
-            bar += i < filled ? '#' : '-';
-        }
 
         static constexpr char frames[] = {'|', '/', '-', '\\'};
         const char spinner = frames[state.spinner_frame % 4];
@@ -213,7 +311,7 @@ private:
         std::ostringstream out;
         out << COLOR_CYAN << spinner << COLOR_RESET << " "
             << state.description << " "
-            << COLOR_GREEN << "[" << bar << "]" << COLOR_RESET << " "
+            << COLOR_GREEN << "[" << make_percent_bar(percent) << "]" << COLOR_RESET << " "
             << std::setw(3) << percent << "%";
 
         if (total_to_download > 0.0) {
@@ -291,20 +389,36 @@ private:
         switch (status) {
             case TransferStatus::SUCCESSFUL:
                 ++result.successful;
-                if (!(state && state->repository_metadata)) {
+                if (state && state->repository_metadata && metadata_activity_) {
+                    metadata_activity_->repository_finished(result_key);
+                } else if (!(state && state->repository_metadata)) {
                     log_ok("Fetch complete: " + description);
                 }
                 break;
             case TransferStatus::ALREADYEXISTS:
                 ++result.successful;
-                if (!(state && state->repository_metadata)) {
+                if (state && state->repository_metadata && metadata_activity_) {
+                    metadata_activity_->repository_finished(result_key);
+                } else if (!(state && state->repository_metadata)) {
                     log_info("Fetch cache hit: " + description);
                 }
                 break;
             case TransferStatus::ERROR: {
                 ++result.failed;
                 result.last_error = msg ? msg : "unknown download error";
+                if (state && state->repository_metadata && metadata_activity_) {
+                    metadata_activity_->repository_finished(result_key);
+                }
                 log_warn("Fetch failed: " + description + " -> " + result.last_error);
+
+                if (
+                    result.last_error.find("Failed writing") != std::string::npos ||
+                    result.last_error.find("writing received data to disk") != std::string::npos ||
+                    result.last_error.find("disk/application") != std::string::npos) {
+                    log_warn(
+                        "Download destination write failed; check free space and write access in "
+                        "/var/cache/libdnf5 and the root filesystem");
+                }
                 break;
             }
         }
@@ -347,6 +461,7 @@ private:
         }
     }
 
+    MetadataActivity * metadata_activity_{nullptr};
     std::list<DownloadState> downloads_;
     std::unordered_map<std::string, Result> results_;
 };
@@ -576,7 +691,8 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         throw std::runtime_error("No enabled package repositories");
     }
 
-    auto download_callbacks = std::make_unique<VerboseDownloadCallbacks>();
+    MetadataActivity metadata_activity(enabled_repo_ids.size());
+    auto download_callbacks = std::make_unique<VerboseDownloadCallbacks>(&metadata_activity);
     auto * download_callbacks_ptr = download_callbacks.get();
     base.set_download_callbacks(std::move(download_callbacks));
 
@@ -585,9 +701,8 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         libdnf5::utils::LockBlocking::BLOCKING);
 
     const auto repo_load_started = std::chrono::steady_clock::now();
-    ActivitySpinner metadata_spinner("Loading repository metadata");
     repo_sack->load_repos();
-    metadata_spinner.stop();
+    metadata_activity.stop();
     log_ok(
         "Repository metadata processed in " +
         elapsed_string(std::chrono::steady_clock::now() - repo_load_started));
@@ -702,6 +817,25 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
 
     try {
         log_info("Downloading packages...");
+
+        {
+            std::error_code space_error;
+            const auto cache_space = std::filesystem::space("/var/cache/libdnf5", space_error);
+            if (!space_error) {
+                log_info(
+                    "Package cache free space: " +
+                    format_bytes(static_cast<double>(cache_space.available)));
+                if (cache_space.available < 64ULL * 1024ULL * 1024ULL) {
+                    log_warn(
+                        "Low package-cache free space; RPM downloads may fail with Curl error (23)");
+                }
+            } else {
+                log_warn(
+                    "Unable to determine free space for /var/cache/libdnf5: " +
+                    space_error.message());
+            }
+        }
+
         const auto download_started = std::chrono::steady_clock::now();
         libdnf5::repo::PackageDownloader downloader(base);
         downloader.set_fail_fast(false);
