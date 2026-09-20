@@ -1,0 +1,102 @@
+.TH SYSPCKG 8 "2026-09-20" "AdavaLinux" "System Administration"
+.SH NAME
+syspckg \- SystemPackager 1.0 for AdavaLinux
+.SH SYNOPSIS
+.B syspckg install
+package... [--source auto|adava|fedora] [-y]
+.PP
+.B syspckg remove
+package... [-y]
+.PP
+.B syspckg update
+[package...] [--source auto|adava|fedora] [-y]
+.PP
+.B syspckg upgrade
+[package...] [--source auto|adava|fedora] [-y]
+.PP
+.B syspckg search
+term... [--source auto|adava|fedora]
+.PP
+.B syspckg info
+package... [--source auto|adava|fedora]
+.PP
+.B syspckg list
+[installed] [--source auto|adava|fedora]
+.PP
+.B syspckg repos
+.PP
+.B syspckg clean
+.SH DESCRIPTION
+SystemPackager is the AdavaLinux package manager. Version 1.0 uses RPM and libdnf5 directly.
+It does not execute the external dnf5 command.
+.PP
+The old System/1 .syspckg implementation is unsupported and is not installed in current systems.
+.SH COMMANDS
+.TP
+.B install
+Resolve dependencies, download RPM archives and install one or more packages.
+.TP
+.B remove
+Remove one or more installed packages.
+.TP
+.B update
+Update selected packages, or all applicable packages when no package is given.
+.TP
+.B upgrade
+Run the upgrade transaction path.
+.TP
+.B search
+Search available package metadata.
+.TP
+.B info
+Show package information.
+.TP
+.B list
+List packages. Use "installed" to limit output to installed packages.
+.TP
+.B repos
+Show configured repositories.
+.TP
+.B clean
+Remove package-manager cache data.
+.SH OPTIONS
+.TP
+.B -y, --assumeyes
+Assume yes for transaction confirmation.
+.TP
+.B --source auto
+Use AdavaLinux and Fedora repositories.
+.TP
+.B --source adava
+Use only the AdavaLinux RPM repository.
+.TP
+.B --source fedora
+Use Fedora and Fedora Updates repositories.
+.SH EXAMPLES
+.TP
+.B syspckg install htop
+Install htop.
+.TP
+.B syspckg install mc --source fedora
+Install Midnight Commander from Fedora.
+.TP
+.B syspckg search xfce
+Search package metadata for XFCE.
+.TP
+.B syspckg list installed
+List installed RPM packages.
+.SH FILES
+.TP
+.B /usr/share/dnf5/repos.d/
+Repository definitions.
+.TP
+.B /var/lib/rpm/
+RPM database.
+.TP
+.B /var/cache/libdnf5/
+Package and metadata cache.
+.TP
+.B /var/lib/syspckg/
+AdavaLinux SystemPackager state.
+.SH VERSION
+SystemPackager 1.0 (AdavaLinux).

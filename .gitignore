@@ -13,17 +13,12 @@
 !tools/installer/*.h
 !tools/installer/tests/
 !tools/installer/tests/*.c
-!tools/syspckg
-!tools/syspckg/main.c
-!tools/syspckg/tests/
-!tools/syspckg/tests/install_*.sh
-!tools/syspckg/tests/gtk_*.sh
-!tools/syspckg/tests/list_*.sh
-!tools/syspckg/tests/missing_*.sh
-!tools/syspckg/tests/update_*.sh
-!tools/syspckg2/
-!tools/syspckg2/**
-tools/syspckg2/syspckg2
+!tools/syspckg/
+!tools/syspckg/**
+tools/syspckg/syspckg
+!tools/syspckg-old/
+!tools/syspckg-old/**
+tools/syspckg-old/syspckg
 !tests/
 !tests/**
 !desktop/
@@ -36,3 +31,6 @@ tools/installer/tests/*.o
 tools/installer/tests/test_helpers
 !filesforlinux/
 !filesforlinux/**
+
+# Generated SystemPackager binary copied by make tools
+filesforlinux/rootfs/usr/bin/syspckg

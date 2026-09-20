@@ -41,7 +41,7 @@
 
 namespace {
 
-constexpr const char * VERSION = "0.2.0";
+constexpr const char * VERSION = "1.0";
 
 constexpr const char * COLOR_RED = "\033[31m";
 constexpr const char * COLOR_YELLOW = "\033[33m";
@@ -934,12 +934,14 @@ struct Options {
 };
 
 void banner() {
-    std::cerr << COLOR_GREEN << "SystemPackager 2" << COLOR_RESET
+    std::cerr << COLOR_GREEN << "SystemPackager" << COLOR_RESET
               << " by Adava Software for Linux in 2026 "
-              << COLOR_YELLOW << "v" << VERSION << COLOR_RESET << "\n";
+              << COLOR_YELLOW << "v" << VERSION << COLOR_RESET
+              << " (AdavaLinux)\n";
 }
 
-void usage(const char * prog) {
+void usage() {
+    constexpr const char * prog = "syspckg";
     std::cerr
         << COLOR_YELLOW << "Usage:" << COLOR_RESET << "\n"
         << "  " << prog << " install <package>... [--source auto|adava|fedora] [-y]\n"
@@ -952,10 +954,10 @@ void usage(const char * prog) {
         << "  " << prog << " repos\n"
         << "  " << prog << " clean\n"
         << "\n"
-        << "SystemPackager 2 talks directly to libdnf5. It does not execute dnf5.\n"
-        << "Sources: auto (AdavaLinux + Fedora), adava, fedora.\n";
+        << "SystemPackager talks directly to libdnf5 and RPM. It does not execute dnf5.\n"
+        << "Sources: auto (AdavaLinux + Fedora), adava, fedora.\n"
+        << "Manual: man syspckg\n";
 }
-
 bool is_command(const std::string & value) {
     static const std::set<std::string> commands{
         "install", "remove", "update", "upgrade", "search", "info", "list", "repos", "clean"};
@@ -1006,7 +1008,7 @@ Options parse_options(int argc, char ** argv) {
     if (!is_command(positional.front())) {
         throw std::runtime_error(
             "Unknown command '" + positional.front() +
-            "'. Package names must follow an explicit command, for example: syspckg2 install " +
+            "'. Package names must follow an explicit command, for example: syspckg install " +
             positional.front());
     }
 
@@ -1148,7 +1150,7 @@ void ensure_rpm_database() {
 
     if (geteuid() != 0) {
         throw std::runtime_error(
-            "RPM database is not initialized; run syspckg2 once as root");
+            "RPM database is not initialized; run syspckg once as root");
     }
 
     log_info("Initializing RPM package database...");
@@ -1395,7 +1397,7 @@ bool confirm_transaction(bool assume_yes) {
 }
 
 bool fedora_bootstrap_marker_missing() {
-    return !std::filesystem::exists("/var/lib/syspckg2/fedora-base.ready");
+    return !std::filesystem::exists("/var/lib/syspckg/fedora-base.ready");
 }
 
 void merge_bootstrap_tree(
@@ -1585,7 +1587,7 @@ const std::vector<std::string> & adavalinux_core_files() {
 }
 
 void backup_adavalinux_core_files() {
-    const std::filesystem::path backup_root{"/var/lib/syspckg2/bootstrap-backup"};
+    const std::filesystem::path backup_root{"/var/lib/syspckg/bootstrap-backup"};
     std::error_code ec;
     std::filesystem::remove_all(backup_root, ec);
     ec.clear();
@@ -1624,7 +1626,7 @@ void backup_adavalinux_core_files() {
 }
 
 void restore_adavalinux_core_files() {
-    const std::filesystem::path backup_root{"/var/lib/syspckg2/bootstrap-backup"};
+    const std::filesystem::path backup_root{"/var/lib/syspckg/bootstrap-backup"};
     std::error_code ec;
 
     for (const auto & file_name : adavalinux_core_files()) {
@@ -1711,10 +1713,10 @@ void finalize_fedora_bootstrap() {
     activate_fedora_runtime();
 
     std::error_code ec;
-    std::filesystem::create_directories("/var/lib/syspckg2", ec);
+    std::filesystem::create_directories("/var/lib/syspckg", ec);
     if (ec) {
         throw std::runtime_error(
-            "Unable to create /var/lib/syspckg2: " + ec.message());
+            "Unable to create /var/lib/syspckg: " + ec.message());
     }
 
     if (access("/usr/bin/ldconfig", X_OK) == 0) {
@@ -1747,7 +1749,7 @@ void finalize_fedora_bootstrap() {
         log_warn("Fedora iconvconfig was not installed during bootstrap");
     }
 
-    std::ofstream marker("/var/lib/syspckg2/fedora-base.ready", std::ios::out | std::ios::trunc);
+    std::ofstream marker("/var/lib/syspckg/fedora-base.ready", std::ios::out | std::ios::trunc);
     if (!marker) {
         throw std::runtime_error("Unable to write Fedora bootstrap marker");
     }
@@ -2062,7 +2064,7 @@ int command_install(libdnf5::Base & base, const Options & opts) {
     for (const auto & spec : opts.args) {
         goal.add_rpm_install(spec, settings);
     }
-    return run_goal(base, goal, opts.assume_yes, "syspckg2 install", true);
+    return run_goal(base, goal, opts.assume_yes, "syspckg install", true);
 }
 
 int command_remove(libdnf5::Base & base, const Options & opts) {
@@ -2074,7 +2076,7 @@ int command_remove(libdnf5::Base & base, const Options & opts) {
     for (const auto & spec : opts.args) {
         goal.add_rpm_remove(spec);
     }
-    return run_goal(base, goal, opts.assume_yes, "syspckg2 remove");
+    return run_goal(base, goal, opts.assume_yes, "syspckg remove");
 }
 
 int command_upgrade(libdnf5::Base & base, const Options & opts) {
@@ -2092,7 +2094,7 @@ int command_upgrade(libdnf5::Base & base, const Options & opts) {
             goal.add_rpm_upgrade(spec, settings);
         }
     }
-    return run_goal(base, goal, opts.assume_yes, "syspckg2 upgrade");
+    return run_goal(base, goal, opts.assume_yes, "syspckg upgrade");
 }
 
 void print_package_line(const libdnf5::rpm::Package & pkg) {
@@ -2217,14 +2219,14 @@ int main(int argc, char ** argv) {
     banner();
 
     if (argc == 1) {
-        usage(argv[0]);
+        usage();
         return 0;
     }
 
     if (argc >= 2) {
         const std::string first{argv[1]};
         if (first == "--help" || first == "-h") {
-            usage(argv[0]);
+            usage();
             return 0;
         }
         if (first == "--version") {
@@ -2279,7 +2281,7 @@ int main(int argc, char ** argv) {
             return command_list(base, opts);
         }
 
-        usage(argv[0]);
+        usage();
         return 1;
     } catch (const std::exception & ex) {
         log_err(ex.what());

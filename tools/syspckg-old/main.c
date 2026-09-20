@@ -2777,7 +2777,9 @@ static int configure_kernel_update_boot(const char *root) {
 }
 
 int main(int argc, char *argv[]) {
-    fprintf(stderr, "SystemPackager by Adava Software for Linux in 2026 v1.0\n");
+    fprintf(stderr, "SystemPackager Legacy for AdavaLinux System/1 (.syspckg)\n");
+    fprintf(stderr, COLOR_YELLOW "WARN: " COLOR_RESET
+            "This legacy package manager is no longer supported. Use the current SystemPackager.\n");
     fflush(stderr);
 
     if (argc < 2) {

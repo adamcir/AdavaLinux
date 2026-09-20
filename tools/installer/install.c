@@ -295,48 +295,22 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
 
 static int install_grub_pkg(const char *pkg, const char *target_root, InstallerLogFn log_fn, void *ctx)
 {
-    const char *bases[] = { INSTALL_MNT "/packages", INSTALL_MNT "/syspckg", INSTALL_MNT };
-    char pattern[256];
-    char local_pkg[256];
     int target_install = target_root != NULL && target_root[0] != '\0';
-    size_t i;
 
-    emit_log(log_fn, ctx, "Looking for local %s package on installer media", pkg);
-    for (i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
-        snprintf(pattern, sizeof(pattern), "%s/%s-*.syspckg", bases[i], pkg);
-        emit_log(log_fn, ctx, "Checking %s", pattern);
-        if (find_first_glob(pattern, local_pkg, sizeof(local_pkg)) == 0) {
-            char *argv[9];
-            emit_log(log_fn, ctx, "Using local package: %s", local_pkg);
-            if (target_install) {
-                installer_build_syspckg_root_install_argv(argv, local_pkg, target_root, 1);
-            } else {
-                installer_build_syspckg_install_argv(argv, local_pkg, 1);
-            }
-            return run_checked(argv, log_fn, ctx);
-        }
-        snprintf(pattern, sizeof(pattern), "%s/%s.syspckg", bases[i], pkg);
-        emit_log(log_fn, ctx, "Checking %s", pattern);
-        if (find_first_glob(pattern, local_pkg, sizeof(local_pkg)) == 0) {
-            char *argv[9];
-            emit_log(log_fn, ctx, "Using local package: %s", local_pkg);
-            if (target_install) {
-                installer_build_syspckg_root_install_argv(argv, local_pkg, target_root, 1);
-            } else {
-                installer_build_syspckg_install_argv(argv, local_pkg, 1);
-            }
-            return run_checked(argv, log_fn, ctx);
-        }
+    emit_log(log_fn, ctx,
+             "Installing RPM package '%s' with SystemPackager 1.0%s",
+             pkg,
+             target_install ? " in target root" : "");
+
+    if (target_install) {
+        char *argv[7];
+        installer_build_syspckg_root_install_argv(argv, pkg, target_root);
+        return run_checked(argv, log_fn, ctx);
     }
 
     {
-        char *argv[9];
-        emit_log(log_fn, ctx, "No local package found; using syspckg repository install");
-        if (target_install) {
-            installer_build_syspckg_root_install_argv(argv, pkg, target_root, 0);
-        } else {
-            installer_build_syspckg_install_argv(argv, pkg, 0);
-        }
+        char *argv[5];
+        installer_build_syspckg_install_argv(argv, pkg);
         return run_checked(argv, log_fn, ctx);
     }
 }

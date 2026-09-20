@@ -288,45 +288,26 @@ void installer_format_progress_bar(int percent, int width, char *out, size_t out
     }
 }
 
-void installer_build_syspckg_install_argv(char *argv[6], const char *selector, int local_only)
+void installer_build_syspckg_install_argv(char *argv[5], const char *selector)
 {
     argv[0] = "syspckg";
     argv[1] = "install";
     argv[2] = (char *)selector;
-    if (local_only) {
-        argv[3] = "-local";
-        argv[4] = "-y";
-        argv[5] = NULL;
-    } else {
-        argv[3] = "-y";
-        argv[4] = NULL;
-        argv[5] = NULL;
-    }
+    argv[3] = "-y";
+    argv[4] = NULL;
 }
 
-void installer_build_syspckg_root_install_argv(char *argv[9],
+void installer_build_syspckg_root_install_argv(char *argv[7],
                                                const char *selector,
-                                               const char *root,
-                                               int local_only)
+                                               const char *root)
 {
-    argv[0] = "syspckg";
-    argv[1] = "install";
-    argv[2] = (char *)selector;
-    if (local_only) {
-        argv[3] = "-local";
-        argv[4] = "--root";
-        argv[5] = (char *)root;
-        argv[6] = "--allow-root";
-        argv[7] = "-y";
-        argv[8] = NULL;
-    } else {
-        argv[3] = "--root";
-        argv[4] = (char *)root;
-        argv[5] = "--allow-root";
-        argv[6] = "-y";
-        argv[7] = NULL;
-        argv[8] = NULL;
-    }
+    argv[0] = "chroot";
+    argv[1] = (char *)root;
+    argv[2] = "/usr/bin/syspckg";
+    argv[3] = "install";
+    argv[4] = (char *)selector;
+    argv[5] = "-y";
+    argv[6] = NULL;
 }
 
 int installer_build_grub_mkconfig_command(const char *root, char *out, size_t out_size)
@@ -566,7 +547,7 @@ int installer_build_syspckg_state_cleanup_command(const char *root, char *out, s
     written = snprintf(out,
                        out_size,
                        "rm -f %s/install.sh %s/root/install.sh %s/usr/bin/installer %s/bin/installer && "
-                       "rm -rf %s/usr/share/syspckg/packages %s/var/cache/syspckg %s/var/lib/syspckg/packages %s/var/lib/syspckg/installed",
+                       "rm -rf %s/usr/share/syspckg-old/packages %s/var/cache/syspckg-old %s/var/lib/syspckg-old/packages %s/var/lib/syspckg-old/installed",
                        root,
                        root,
                        root,

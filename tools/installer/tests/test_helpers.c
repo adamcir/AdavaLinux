@@ -138,48 +138,28 @@ static void test_log_line_wraps_to_next_visual_row(void)
 
 static void test_syspckg_install_argv_order(void)
 {
-    char *argv[6];
+    char *argv[5];
 
-    installer_build_syspckg_install_argv(argv, "grub-bios", 0);
+    installer_build_syspckg_install_argv(argv, "grub-bios");
     assert(strcmp(argv[0], "syspckg") == 0);
     assert(strcmp(argv[1], "install") == 0);
     assert(strcmp(argv[2], "grub-bios") == 0);
     assert(strcmp(argv[3], "-y") == 0);
     assert(argv[4] == NULL);
-
-    installer_build_syspckg_install_argv(argv, "/mnt/install/packages/grub-bios.syspckg", 1);
-    assert(strcmp(argv[0], "syspckg") == 0);
-    assert(strcmp(argv[1], "install") == 0);
-    assert(strcmp(argv[2], "/mnt/install/packages/grub-bios.syspckg") == 0);
-    assert(strcmp(argv[3], "-local") == 0);
-    assert(strcmp(argv[4], "-y") == 0);
-    assert(argv[5] == NULL);
 }
 
 static void test_syspckg_root_install_argv_order(void)
 {
-    char *argv[9];
+    char *argv[7];
 
-    installer_build_syspckg_root_install_argv(argv, "grub-bios", "/mnt/root", 0);
-    assert(strcmp(argv[0], "syspckg") == 0);
-    assert(strcmp(argv[1], "install") == 0);
-    assert(strcmp(argv[2], "grub-bios") == 0);
-    assert(strcmp(argv[3], "--root") == 0);
-    assert(strcmp(argv[4], "/mnt/root") == 0);
-    assert(strcmp(argv[5], "--allow-root") == 0);
-    assert(strcmp(argv[6], "-y") == 0);
-    assert(argv[7] == NULL);
-
-    installer_build_syspckg_root_install_argv(argv, "/mnt/install/packages/grub-bios.syspckg", "/mnt/root", 1);
-    assert(strcmp(argv[0], "syspckg") == 0);
-    assert(strcmp(argv[1], "install") == 0);
-    assert(strcmp(argv[2], "/mnt/install/packages/grub-bios.syspckg") == 0);
-    assert(strcmp(argv[3], "-local") == 0);
-    assert(strcmp(argv[4], "--root") == 0);
-    assert(strcmp(argv[5], "/mnt/root") == 0);
-    assert(strcmp(argv[6], "--allow-root") == 0);
-    assert(strcmp(argv[7], "-y") == 0);
-    assert(argv[8] == NULL);
+    installer_build_syspckg_root_install_argv(argv, "grub-bios", "/mnt/root");
+    assert(strcmp(argv[0], "chroot") == 0);
+    assert(strcmp(argv[1], "/mnt/root") == 0);
+    assert(strcmp(argv[2], "/usr/bin/syspckg") == 0);
+    assert(strcmp(argv[3], "install") == 0);
+    assert(strcmp(argv[4], "grub-bios") == 0);
+    assert(strcmp(argv[5], "-y") == 0);
+    assert(argv[6] == NULL);
 }
 
 static void test_confirmation_phrase_matches_exact_disk_phrase(void)

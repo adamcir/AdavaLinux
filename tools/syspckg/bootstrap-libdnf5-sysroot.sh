@@ -40,7 +40,7 @@ ensure_debian_archive_keyring() {
 
     echo "==> Debian archive keyring missing on host; bootstrapping it with host APT"
 
-    KEYRING_TMP="$(mktemp -d "${TMPDIR:-/tmp}/syspckg2-debian-keyring.XXXXXX")"
+    KEYRING_TMP="$(mktemp -d "${TMPDIR:-/tmp}/syspckg-debian-keyring.XXXXXX")"
 
     (
         cd "$KEYRING_TMP"

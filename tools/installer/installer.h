@@ -62,11 +62,10 @@ int installer_next_wrapped_log_segment(const char *line,
                                        char *out,
                                        size_t out_size,
                                        size_t *next);
-void installer_build_syspckg_install_argv(char *argv[6], const char *selector, int local_only);
-void installer_build_syspckg_root_install_argv(char *argv[9],
+void installer_build_syspckg_install_argv(char *argv[5], const char *selector);
+void installer_build_syspckg_root_install_argv(char *argv[7],
                                                const char *selector,
-                                               const char *root,
-                                               int local_only);
+                                               const char *root);
 int installer_build_grub_mkconfig_command(const char *root, char *out, size_t out_size);
 int installer_build_default_grub_config(const char *root_arg,
                                         InstallerAcpiMode acpi_mode,

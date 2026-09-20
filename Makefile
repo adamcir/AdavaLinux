@@ -17,19 +17,16 @@ FILESFORLINUX_DISK_INITRAMFS_DIR := $(PROJECT_DIR)/filesforlinux/initramfs-disk
 FILESFORLINUX_ISO_DIR := $(PROJECT_DIR)/filesforlinux/iso
 INSTALLER_SRC_DIR := $(PROJECT_DIR)/tools/installer
 INSTALLER_BIN := $(INSTALLER_SRC_DIR)/installer
+SYSPCKG_OLD_SRC_DIR := $(PROJECT_DIR)/tools/syspckg-old
 SYSPCKG_SRC_DIR := $(PROJECT_DIR)/tools/syspckg
 SYSPCKG_BIN := $(SYSPCKG_SRC_DIR)/syspckg
-SYSPCKG2_SRC_DIR := $(PROJECT_DIR)/tools/syspckg2
-SYSPCKG2_BIN := $(SYSPCKG2_SRC_DIR)/syspckg2
-SYSPCKG2_BOOTSTRAP := $(SYSPCKG2_SRC_DIR)/bootstrap-libdnf5-sysroot.sh
+SYSPCKG_BOOTSTRAP := $(SYSPCKG_SRC_DIR)/bootstrap-libdnf5-sysroot.sh
 
 TARGET_ARCH ?= x86_64
 JOBS ?= $(shell nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 CROSS_COMPILE ?=
 KERNEL_DEFCONFIG ?= defconfig
 SYSPCKG_SYSROOT ?=
-SYSPCKG2_SYSROOT ?=
-SYSPCKG_PACKAGE_DIR ?= $(PROJECT_DIR)/../syspckg/packages
 GRUB_I386_PC_DIR ?=
 GRUB_X86_64_EFI_DIR ?=
 MEMTEST_BIOS_IMAGE ?= /boot/mt86+ia32
@@ -97,12 +94,11 @@ FILESFORLINUX_DISK_INITRAMFS_DIR="$(FILESFORLINUX_DISK_INITRAMFS_DIR)"
 FILESFORLINUX_ISO_DIR="$(FILESFORLINUX_ISO_DIR)"
 INSTALLER_SRC_DIR="$(INSTALLER_SRC_DIR)"
 INSTALLER_BIN="$(INSTALLER_BIN)"
+SYSPCKG_OLD_SRC_DIR="$(SYSPCKG_OLD_SRC_DIR)"
 SYSPCKG_SRC_DIR="$(SYSPCKG_SRC_DIR)"
 SYSPCKG_BIN="$(SYSPCKG_BIN)"
-SYSPCKG2_SRC_DIR="$(SYSPCKG2_SRC_DIR)"
-SYSPCKG2_BIN="$(SYSPCKG2_BIN)"
-SYSPCKG2_BOOTSTRAP="$(SYSPCKG2_BOOTSTRAP)"
-SYSPCKG2_SYSROOT="$(SYSPCKG2_SYSROOT)"
+SYSPCKG_BOOTSTRAP="$(SYSPCKG_BOOTSTRAP)"
+SYSPCKG_SYSROOT="$(SYSPCKG_SYSROOT)"
 JOBS="$(JOBS)"
 TARGET_ARCH="$(TARGET_ARCH)"
 CROSS_COMPILE="$(CROSS_COMPILE)"
@@ -119,8 +115,6 @@ OUT_DISK_INITRAMFS_NAME="$(OUT_DISK_INITRAMFS_NAME)"
 ISO_OUT_BIOS="$(ISO_OUT_BIOS)"
 ISO_OUT_UEFI="$(ISO_OUT_UEFI)"
 SYSPCKG_MATCH="$(SYSPCKG_MATCH)"
-SYSPCKG_SYSROOT="$(SYSPCKG_SYSROOT)"
-SYSPCKG_PACKAGE_DIR="$(SYSPCKG_PACKAGE_DIR)"
 QEMU_UEFI_VIDEO="$(QEMU_UEFI_VIDEO)"
 GRUB_I386_PC_DIR="$(GRUB_I386_PC_DIR)"
 GRUB_X86_64_EFI_DIR="$(GRUB_X86_64_EFI_DIR)"
@@ -183,61 +177,6 @@ bbmake() {
     make -j"$$JOBS" -C "$$BUSYBOX_DIR" ARCH="$$BUSYBOX_ARCH" "$$@"
   fi
 }
-copy_one_lib() {
-  src="$$1"
-  [ -e "$$src" ] || return 0
-  dest="$$ROOTFS_DIR$$src"
-  mkdir -p "$$(dirname "$$dest")"
-  cp -aL "$$src" "$$dest" 2>/dev/null || cp -L "$$src" "$$dest"
-  if [ -L "$$src" ]; then
-    tgt="$$(readlink -f "$$src" 2>/dev/null || true)"
-    if [ -n "$$tgt" ] && [ -f "$$tgt" ]; then
-      dest2="$$ROOTFS_DIR$$tgt"
-      mkdir -p "$$(dirname "$$dest2")"
-      cp -a "$$tgt" "$$dest2" 2>/dev/null || cp "$$tgt" "$$dest2" || true
-    fi
-  fi
-}
-copy_deps_for_binary() {
-  bin="$$1"
-  [ -x "$$bin" ] || return 0
-  ldd "$$bin" 2>/dev/null | while IFS= read -r line; do
-    case "$$line" in
-      *" => not found"*) ;;
-      /*)
-        set -- $$line
-        copy_one_lib "$$1"
-        ;;
-      *"=> "/*)
-        set -- $$line
-        copy_one_lib "$$3"
-        ;;
-    esac
-  done
-}
-copy_lib_from_sysroot() {
-  rel="$$1"
-  for base in /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu; do
-    src="$$SYSPCKG_SYSROOT$$base/$$rel"
-    if [ -f "$$src" ]; then
-      dest="$$ROOTFS_DIR/lib/x86_64-linux-gnu/$$rel"
-      mkdir -p "$$(dirname "$$dest")"
-      cp -a "$$src" "$$dest"
-      return 0
-    fi
-  done
-  return 1
-}
-prepare_syspckg_runtime_from_sysroot() {
-  [ -n "$$SYSPCKG_SYSROOT" ] || return 1
-  [ -d "$$SYSPCKG_SYSROOT" ] || die "SYSPCKG_SYSROOT neexistuje: $$SYSPCKG_SYSROOT"
-  mkdir -p "$$ROOTFS_DIR/lib/x86_64-linux-gnu" "$$ROOTFS_DIR/lib64"
-  copy_lib_from_sysroot "ld-linux-x86-64.so.2" || die "SYSPCKG_SYSROOT is missing ld-linux-x86-64.so.2 in lib or usr/lib for x86_64"
-  ln -sf ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$$ROOTFS_DIR/lib64/ld-linux-x86-64.so.2"
-  for lib in libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libgcc_s.so.1 libstdc++.so.6; do
-    copy_lib_from_sysroot "$$lib" || true
-  done
-}
 ensure_amd64_arch_enabled() {
   if dpkg --print-foreign-architectures 2>/dev/null | grep -qx amd64; then
     return 0
@@ -288,39 +227,39 @@ ensure_amd64_ncurses() {
   NCURSES_CPPFLAGS="-I$$NCURSES_SYSROOT/usr/include"
   NCURSES_LDLIBS="$$NCURSES_LIBDIR/libncurses.a $$NCURSES_LIBDIR/libtinfo.a"
 }
-ensure_syspckg2_sysroot() {
-  if [ -n "$$SYSPCKG2_SYSROOT" ]; then
-    [ -f "$$SYSPCKG2_SYSROOT/usr/include/libdnf5/base/base.hpp" ] || die "SYSPCKG2_SYSROOT is missing libdnf5 headers"
-    [ -e "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] || \
-    [ -e "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so.2" ] || die "SYSPCKG2_SYSROOT is missing libdnf5.so"
+ensure_syspckg_sysroot() {
+  if [ -n "$$SYSPCKG_SYSROOT" ]; then
+    [ -f "$$SYSPCKG_SYSROOT/usr/include/libdnf5/base/base.hpp" ] || die "SYSPCKG_SYSROOT is missing libdnf5 headers"
+    [ -e "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so" ] || \
+    [ -e "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/libdnf5.so.2" ] || die "SYSPCKG_SYSROOT is missing libdnf5.so"
     return 0
   fi
 
   need_cmd apt-get
   need_cmd dpkg-deb
-  [ -f "$$SYSPCKG2_BOOTSTRAP" ] || die "Missing libdnf5 bootstrap script: $$SYSPCKG2_BOOTSTRAP"
+  [ -f "$$SYSPCKG_BOOTSTRAP" ] || die "Missing libdnf5 bootstrap script: $$SYSPCKG_BOOTSTRAP"
 
-  SYSPCKG2_SYSROOT="$$TOOLCACHE_DIR/libdnf5-amd64"
+  SYSPCKG_SYSROOT="$$TOOLCACHE_DIR/libdnf5-amd64"
   say "Preparing isolated Debian forky amd64 libdnf5 sysroot"
-  sh "$$SYSPCKG2_BOOTSTRAP" "$$SYSPCKG2_SYSROOT" amd64
+  sh "$$SYSPCKG_BOOTSTRAP" "$$SYSPCKG_SYSROOT" amd64
 }
-copy_syspckg2_runtime_from_sysroot() {
-  ensure_syspckg2_sysroot
+copy_syspckg_runtime_from_sysroot() {
+  ensure_syspckg_sysroot
 
-  private_lib="$$ROOTFS_DIR/usr/lib/syspckg2"
-  mkdir -p "$$private_lib" "$$ROOTFS_DIR/usr/libexec/syspckg2"
+  private_lib="$$ROOTFS_DIR/usr/lib/syspckg"
+  mkdir -p "$$private_lib" "$$ROOTFS_DIR/usr/libexec/syspckg"
 
   for rel in lib/x86_64-linux-gnu usr/lib/x86_64-linux-gnu; do
-    srcdir="$$SYSPCKG2_SYSROOT/$$rel"
+    srcdir="$$SYSPCKG_SYSROOT/$$rel"
     [ -d "$$srcdir" ] || continue
     find "$$srcdir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -exec cp -aL {} "$$private_lib/" \;
   done
 
   loader=""
   for cand in \
-    "$$SYSPCKG2_SYSROOT/lib64/ld-linux-x86-64.so.2" \
-    "$$SYSPCKG2_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" \
-    "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"; do
+    "$$SYSPCKG_SYSROOT/lib64/ld-linux-x86-64.so.2" \
+    "$$SYSPCKG_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" \
+    "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"; do
     if [ -f "$$cand" ]; then
       loader="$$cand"
       break
@@ -330,49 +269,49 @@ copy_syspckg2_runtime_from_sysroot() {
   cp -aL "$$loader" "$$private_lib/ld-linux-x86-64.so.2"
 
   for rel in usr/lib/rpm usr/share/rpm etc/rpm; do
-    if [ -d "$$SYSPCKG2_SYSROOT/$$rel" ]; then
+    if [ -d "$$SYSPCKG_SYSROOT/$$rel" ]; then
       mkdir -p "$$ROOTFS_DIR/$$rel"
-      cp -a "$$SYSPCKG2_SYSROOT/$$rel/." "$$ROOTFS_DIR/$$rel/"
+      cp -a "$$SYSPCKG_SYSROOT/$$rel/." "$$ROOTFS_DIR/$$rel/"
     fi
   done
 
-  if [ -d "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins" ]; then
+  if [ -d "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins" ]; then
     mkdir -p "$$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins"
-    cp -a "$$SYSPCKG2_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins/." \
+    cp -a "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/rpm-plugins/." \
       "$$ROOTFS_DIR/usr/lib/x86_64-linux-gnu/rpm-plugins/"
   fi
 
   [ -f "$$ROOTFS_DIR/usr/lib/rpm/rpmrc" ] || die "RPM runtime is missing /usr/lib/rpm/rpmrc"
   [ -f "$$ROOTFS_DIR/usr/lib/rpm/macros" ] || die "RPM runtime is missing /usr/lib/rpm/macros"
 
-  if [ -d "$$SYSPCKG2_SYSROOT/etc/ssl" ]; then
+  if [ -d "$$SYSPCKG_SYSROOT/etc/ssl" ]; then
     mkdir -p "$$ROOTFS_DIR/etc/ssl"
-    cp -a "$$SYSPCKG2_SYSROOT/etc/ssl/." "$$ROOTFS_DIR/etc/ssl/"
+    cp -a "$$SYSPCKG_SYSROOT/etc/ssl/." "$$ROOTFS_DIR/etc/ssl/"
   fi
-  if [ -d "$$SYSPCKG2_SYSROOT/usr/share/ca-certificates" ]; then
+  if [ -d "$$SYSPCKG_SYSROOT/usr/share/ca-certificates" ]; then
     mkdir -p "$$ROOTFS_DIR/usr/share/ca-certificates"
-    cp -a "$$SYSPCKG2_SYSROOT/usr/share/ca-certificates/." "$$ROOTFS_DIR/usr/share/ca-certificates/"
+    cp -a "$$SYSPCKG_SYSROOT/usr/share/ca-certificates/." "$$ROOTFS_DIR/usr/share/ca-certificates/"
   fi
 
-  [ -x "$$SYSPCKG2_SYSROOT/usr/bin/gpg" ] || die "libdnf5 sysroot is missing /usr/bin/gpg"
-  [ -x "$$SYSPCKG2_SYSROOT/usr/bin/gpgconf" ] || die "libdnf5 sysroot is missing /usr/bin/gpgconf"
-  mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg2" "$$ROOTFS_DIR/usr/bin"
-  cp -aL "$$SYSPCKG2_SYSROOT/usr/bin/gpg" "$$ROOTFS_DIR/usr/libexec/syspckg2/gpg.real"
-  cp -aL "$$SYSPCKG2_SYSROOT/usr/bin/gpgconf" "$$ROOTFS_DIR/usr/libexec/syspckg2/gpgconf.real"
-  if [ -d "$$SYSPCKG2_SYSROOT/usr/share/gnupg" ]; then
+  [ -x "$$SYSPCKG_SYSROOT/usr/bin/gpg" ] || die "libdnf5 sysroot is missing /usr/bin/gpg"
+  [ -x "$$SYSPCKG_SYSROOT/usr/bin/gpgconf" ] || die "libdnf5 sysroot is missing /usr/bin/gpgconf"
+  mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg" "$$ROOTFS_DIR/usr/bin"
+  cp -aL "$$SYSPCKG_SYSROOT/usr/bin/gpg" "$$ROOTFS_DIR/usr/libexec/syspckg/gpg.real"
+  cp -aL "$$SYSPCKG_SYSROOT/usr/bin/gpgconf" "$$ROOTFS_DIR/usr/libexec/syspckg/gpgconf.real"
+  if [ -d "$$SYSPCKG_SYSROOT/usr/share/gnupg" ]; then
     mkdir -p "$$ROOTFS_DIR/usr/share/gnupg"
-    cp -a "$$SYSPCKG2_SYSROOT/usr/share/gnupg/." "$$ROOTFS_DIR/usr/share/gnupg/"
+    cp -a "$$SYSPCKG_SYSROOT/usr/share/gnupg/." "$$ROOTFS_DIR/usr/share/gnupg/"
   fi
 
   printf '%s\n' \
     '#!/bin/sh' \
-    'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/gpg.real "$$@"' \
+    'exec /usr/lib/syspckg/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg /usr/libexec/syspckg/gpg.real "$$@"' \
     > "$$ROOTFS_DIR/usr/bin/gpg"
   chmod +x "$$ROOTFS_DIR/usr/bin/gpg"
 
   printf '%s\n' \
     '#!/bin/sh' \
-    'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/gpgconf.real "$$@"' \
+    'exec /usr/lib/syspckg/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg /usr/libexec/syspckg/gpgconf.real "$$@"' \
     > "$$ROOTFS_DIR/usr/bin/gpgconf"
   chmod +x "$$ROOTFS_DIR/usr/bin/gpgconf"
 
@@ -382,39 +321,6 @@ copy_syspckg2_runtime_from_sysroot() {
     "$$ROOTFS_DIR/var/lib/rpm" \
     "$$ROOTFS_DIR/usr/lib/sysimage/libdnf5" \
     "$$ROOTFS_DIR/var/log"
-}
-ensure_amd64_sysroot() {
-  if [ -n "$$SYSPCKG_SYSROOT" ]; then
-    [ -f "$$SYSPCKG_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
-    [ -f "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
-      die "SYSPCKG_SYSROOT does not contain the loader in lib or usr/lib x86_64-linux-gnu"
-    return 0
-  fi
-  for cand in /tmp/amd64-libc /usr/x86_64-linux-gnu /usr/local/x86_64-linux-gnu "$$TOOLCACHE_DIR/amd64-sysroot"; do
-    if [ -f "$$cand/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
-       [ -f "$$cand/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ]; then
-      SYSPCKG_SYSROOT="$$cand"
-      return 0
-    fi
-  done
-  need_cmd apt
-  need_cmd dpkg-deb
-  ensure_amd64_arch_enabled
-  say "Bootstrapping amd64 sysroot for syspckg"
-  mkdir -p "$$TOOLCACHE_DIR/amd64-sysroot" "$$TOOLCACHE_DIR/downloads"
-  rm -rf "$$TOOLCACHE_DIR/amd64-sysroot"/*
-  (
-    cd "$$TOOLCACHE_DIR/downloads"
-    rm -f libc6_*_amd64.deb libgcc-s1_*_amd64.deb libstdc++6_*_amd64.deb
-    apt download libc6:amd64 libgcc-s1:amd64 libstdc++6:amd64
-    dpkg-deb -x libc6_*_amd64.deb "$$TOOLCACHE_DIR/amd64-sysroot"
-    dpkg-deb -x libgcc-s1_*_amd64.deb "$$TOOLCACHE_DIR/amd64-sysroot"
-    dpkg-deb -x libstdc++6_*_amd64.deb "$$TOOLCACHE_DIR/amd64-sysroot"
-  )
-  SYSPCKG_SYSROOT="$$TOOLCACHE_DIR/amd64-sysroot"
-  [ -f "$$SYSPCKG_SYSROOT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
-  [ -f "$$SYSPCKG_SYSROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" ] || \
-    die "Failed to prepare amd64 sysroot with ld-linux-x86-64.so.2"
 }
 ensure_grub_i386_pc_modules() {
   if [ -n "$$GRUB_I386_PC_DIR" ] && [ -d "$$GRUB_I386_PC_DIR" ]; then return 0; fi
@@ -495,29 +401,19 @@ tools:
 	  say "tools/installer not found -> skipping ncurses installer frontend build"
 	fi
 	[ -d "$$SYSPCKG_SRC_DIR" ] || die "tools/syspckg not found"
-	say "Building SystemPackager"
+	say "Building SystemPackager 1.0 (direct libdnf5/RPM frontend)"
+	ensure_syspckg_sysroot
 	if [ -n "$$CROSS_COMPILE" ]; then
-	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all CC="$${CROSS_COMPILE}gcc"
+	  need_cmd "$${CROSS_COMPILE}g++"
+	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all CXX="$${CROSS_COMPILE}g++" SYSROOT="$$SYSPCKG_SYSROOT"
 	else
-	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all
+	  need_cmd g++
+	  make -C "$$SYSPCKG_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG_SRC_DIR" all CXX="g++" SYSROOT="$$SYSPCKG_SYSROOT"
 	fi
 	[ -x "$$SYSPCKG_BIN" ] || die "SystemPackager binary not found after build: $$SYSPCKG_BIN"
 	mkdir -p "$$FILESFORLINUX_ROOTFS_DIR/usr/bin"
 	cp -f "$$SYSPCKG_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
 	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
-	[ -d "$$SYSPCKG2_SRC_DIR" ] || die "tools/syspckg2 not found"
-	say "Building SystemPackager 2 (direct libdnf5 frontend)"
-	ensure_syspckg2_sysroot
-	if [ -n "$$CROSS_COMPILE" ]; then
-	  need_cmd "$${CROSS_COMPILE}g++"
-	  make -C "$$SYSPCKG2_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG2_SRC_DIR" all CXX="$${CROSS_COMPILE}g++" SYSROOT="$$SYSPCKG2_SYSROOT"
-	else
-	  need_cmd g++
-	  make -C "$$SYSPCKG2_SRC_DIR" clean && make -j"$$JOBS" -C "$$SYSPCKG2_SRC_DIR" all CXX="g++" SYSROOT="$$SYSPCKG2_SYSROOT"
-	fi
-	[ -x "$$SYSPCKG2_BIN" ] || die "SystemPackager 2 binary not found after build: $$SYSPCKG2_BIN"
-	cp -f "$$SYSPCKG2_BIN" "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
-	chmod +x "$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
 
 kernel:
 	$(COMMON_SH)
@@ -625,10 +521,7 @@ iso:
 	say "Copying rootfs templates from filesforlinux"
 	[ -d "$$FILESFORLINUX_ROOTFS_DIR" ] || die "Rootfs template directory not found: $$FILESFORLINUX_ROOTFS_DIR"
 	cp -a "$$FILESFORLINUX_ROOTFS_DIR/." "$$ROOTFS_DIR/"
-	# GRUB is executed by the live installer.  Keep its complete runtime
-	# dependency closure in the installer-local SystemPackager repository so
-	# UEFI installation neither needs network access nor skips liblzma.
-	say "Bundling GRUB installer dependency packages"
+	say "Copying disk initramfs templates"
 	[ -d "$$FILESFORLINUX_DISK_INITRAMFS_DIR" ] || die "disk initramfs template directory not found: $$FILESFORLINUX_DISK_INITRAMFS_DIR"
 	cp -a "$$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$$DISK_INITRAMFS_DIR/"
 	for req in etc/os-release init etc/motd etc/profile etc/inittab etc/init.d/rcS usr/share/udhcpc/default.script; do
@@ -640,36 +533,25 @@ iso:
 	chmod 600 "$$ROOTFS_DIR/etc/shadow" 2>/dev/null || true
 	[ -f "$$DISK_INITRAMFS_DIR/init" ] || die "Required file missing in disk initramfs templates: init"
 	chmod +x "$$DISK_INITRAMFS_DIR/init"
-	say "Installing SystemPackager into rootfs"
-	SYSPCKG_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
-	[ -x "$$SYSPCKG_BIN" ] || die "Executable syspckg not found: $$SYSPCKG_BIN"
-	SYSPCKG_INFO="$$(file -b "$$SYSPCKG_BIN" 2>/dev/null || true)"
+	say "Installing SystemPackager 1.0 into rootfs"
+	SYSPCKG_BUILT_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg"
+	[ -x "$$SYSPCKG_BUILT_BIN" ] || die "Executable syspckg not found: $$SYSPCKG_BUILT_BIN. Run make tools first."
+	SYSPCKG_INFO="$$(file -b "$$SYSPCKG_BUILT_BIN" 2>/dev/null || true)"
 	case "$$SYSPCKG_INFO" in
 	  *"$$SYSPCKG_MATCH"*) ;;
 	  *) die "syspckg is not an x86_64 binary: $$SYSPCKG_INFO" ;;
 	esac
-	mkdir -p "$$ROOTFS_DIR/usr/bin"
-	cp -a "$$SYSPCKG_BIN" "$$ROOTFS_DIR/usr/bin/syspckg"
-	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
-	say "Installing SystemPackager 2 into rootfs"
-	SYSPCKG2_BIN="$$FILESFORLINUX_ROOTFS_DIR/usr/bin/syspckg2"
-	[ -x "$$SYSPCKG2_BIN" ] || die "Executable syspckg2 not found: $$SYSPCKG2_BIN"
-	SYSPCKG2_INFO="$$(file -b "$$SYSPCKG2_BIN" 2>/dev/null || true)"
-	case "$$SYSPCKG2_INFO" in
-	  *"$$SYSPCKG_MATCH"*) ;;
-	  *) die "syspckg2 is not an x86_64 binary: $$SYSPCKG2_INFO" ;;
-	esac
-	mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg2"
-	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/libexec/syspckg2/syspckg2.real"
+	mkdir -p "$$ROOTFS_DIR/usr/bin" "$$ROOTFS_DIR/usr/libexec/syspckg"
+	cp -a "$$SYSPCKG_BUILT_BIN" "$$ROOTFS_DIR/usr/libexec/syspckg/syspckg.real"
 	printf '%s\n' \
 	  '#!/bin/sh' \
 	  'export PATH=/usr/bin:/bin' \
-	  'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/syspckg2.real "$$@"' \
-	  > "$$ROOTFS_DIR/usr/bin/syspckg2"
-	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg2"
-	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
-	say "Installing private libdnf5 runtime for SystemPackager 2"
-	copy_syspckg2_runtime_from_sysroot
+	  'exec /usr/lib/syspckg/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg /usr/libexec/syspckg/syspckg.real "$$@"' \
+	  > "$$ROOTFS_DIR/usr/bin/syspckg"
+	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg"
+	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
+	say "Installing private libdnf5/RPM runtime for SystemPackager"
+	copy_syspckg_runtime_from_sysroot
 	say "Copying minimal terminfo into rootfs"
 	if [ -d /usr/share/terminfo ]; then
 	  mkdir -p "$$ROOTFS_DIR/usr/share/terminfo"
@@ -681,18 +563,6 @@ iso:
 	    mkdir -p "$$ROOTFS_DIR/usr/share/terminfo/x"
 	    cp -a /usr/share/terminfo/x/xterm-256color "$$ROOTFS_DIR/usr/share/terminfo/x/" 2>/dev/null || true
 	  fi
-	fi
-	SYSPCKG_LINK_INFO="$$(file -b "$$ROOTFS_DIR/usr/bin/syspckg" 2>/dev/null || true)"
-	case "$$SYSPCKG_LINK_INFO" in
-	  *"statically linked"*) say "Legacy SystemPackager is static -> no global libc runtime needed" ;;
-	  *) die "Legacy syspckg must be statically linked before Fedora RPM bootstrap: $$SYSPCKG_LINK_INFO" ;;
-	esac
-	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" ]; then
-	  say "Copying syspckg source config into rootfs"
-	  mkdir -p "$$ROOTFS_DIR/etc" "$$ROOTFS_DIR/etc/syspckg"
-	  cp -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" "$$ROOTFS_DIR/etc/syspckg/syspckg-source"
-	else
-	  say "syspckg-source not found in filesforlinux/rootfs/etc -> using syspckg built-in default URL"
 	fi
 	if command -v pigz >/dev/null 2>&1; then
 	  say "Packing $$OUT_INSTALLER_INITRAMFS_NAME with pigz ($$JOBS threads)"
