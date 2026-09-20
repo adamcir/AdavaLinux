@@ -72,6 +72,7 @@ int installer_build_default_grub_config(const char *root_arg,
                                         char *out,
                                         size_t out_size);
 int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size_t out_size);
+int installer_build_grub_compat_config_command(const char *root, char *out, size_t out_size);
 int installer_build_prepare_grub_chroot_command(const char *root, char *out, size_t out_size);
 int installer_build_disable_standard_grub_generators_command(const char *root, char *out, size_t out_size);
 int installer_build_uefi_removable_fallback_command(const char *root, char *out, size_t out_size);
