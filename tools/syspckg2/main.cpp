@@ -119,7 +119,7 @@ public:
             while (running_.load()) {
                 render_status_line(
                     std::string(COLOR_CYAN) + frames[frame++ % 4] + COLOR_RESET + " " + message_ + "...");
-                std::this_thread::sleep_for(std::chrono::milliseconds(90));
+                std::this_thread::sleep_for(std::chrono::milliseconds(180));
             }
         });
     }
@@ -240,7 +240,9 @@ private:
         });
         auto & state = downloads_.back();
 
-        if (interactive_terminal()) {
+        if (state.repository_metadata) {
+            log_info("Fetching repository metadata: " + state.result_key);
+        } else if (interactive_terminal()) {
             render_status_line(progress_bar(state, 0.0, total_to_download));
         } else {
             log_info("Fetch start: " + state.description + " (" + format_bytes(total_to_download) + ")");
@@ -258,6 +260,10 @@ private:
         percent = std::clamp(percent, 0, 100);
         const int bucket = (percent / 10) * 10;
         ++state->spinner_frame;
+
+        if (state->repository_metadata) {
+            return OK;
+        }
 
         if (interactive_terminal()) {
             render_status_line(progress_bar(*state, downloaded, total_to_download));
@@ -278,23 +284,25 @@ private:
         const std::string result_key = state ? state->result_key : description;
         auto & result = results_[result_key];
 
-        if (state && interactive_terminal() && status != TransferStatus::ERROR) {
+        if (state && !state->repository_metadata && interactive_terminal() && status != TransferStatus::ERROR) {
             render_status_line(progress_bar(*state, state->total, state->total));
         }
 
         switch (status) {
             case TransferStatus::SUCCESSFUL:
                 ++result.successful;
-                log_ok("Fetch complete: " + description);
                 if (state && state->repository_metadata) {
-                    log_info("Processing repository metadata: " + description + "...");
+                    log_ok("Repository metadata fetched: " + result_key);
+                } else {
+                    log_ok("Fetch complete: " + description);
                 }
                 break;
             case TransferStatus::ALREADYEXISTS:
                 ++result.successful;
-                log_info("Fetch cache hit: " + description);
                 if (state && state->repository_metadata) {
-                    log_info("Using cached repository metadata: " + description);
+                    log_info("Repository metadata cache hit: " + result_key);
+                } else {
+                    log_info("Fetch cache hit: " + description);
                 }
                 break;
             case TransferStatus::ERROR: {
@@ -580,9 +588,10 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         write_lock ? libdnf5::utils::LockAccess::WRITE : libdnf5::utils::LockAccess::READ,
         libdnf5::utils::LockBlocking::BLOCKING);
 
-    log_info("Loading repository metadata...");
     const auto repo_load_started = std::chrono::steady_clock::now();
+    ActivitySpinner metadata_spinner("Loading repository metadata");
     repo_sack->load_repos();
+    metadata_spinner.stop();
     log_ok(
         "Repository metadata processed in " +
         elapsed_string(std::chrono::steady_clock::now() - repo_load_started));
