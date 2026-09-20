@@ -138,28 +138,32 @@ static void test_log_line_wraps_to_next_visual_row(void)
 
 static void test_syspckg_install_argv_order(void)
 {
-    char *argv[5];
+    char *argv[7];
 
-    installer_build_syspckg_install_argv(argv, "grub-bios");
+    installer_build_syspckg_install_argv(argv, "grub2-pc");
     assert(strcmp(argv[0], "syspckg") == 0);
     assert(strcmp(argv[1], "install") == 0);
-    assert(strcmp(argv[2], "grub-bios") == 0);
-    assert(strcmp(argv[3], "-y") == 0);
-    assert(argv[4] == NULL);
+    assert(strcmp(argv[2], "grub2-pc") == 0);
+    assert(strcmp(argv[3], "--source") == 0);
+    assert(strcmp(argv[4], "fedora") == 0);
+    assert(strcmp(argv[5], "-y") == 0);
+    assert(argv[6] == NULL);
 }
 
 static void test_syspckg_root_install_argv_order(void)
 {
-    char *argv[7];
+    char *argv[9];
 
-    installer_build_syspckg_root_install_argv(argv, "grub-bios", "/mnt/root");
+    installer_build_syspckg_root_install_argv(argv, "grub2-pc", "/mnt/root");
     assert(strcmp(argv[0], "chroot") == 0);
     assert(strcmp(argv[1], "/mnt/root") == 0);
     assert(strcmp(argv[2], "/usr/bin/syspckg") == 0);
     assert(strcmp(argv[3], "install") == 0);
-    assert(strcmp(argv[4], "grub-bios") == 0);
-    assert(strcmp(argv[5], "-y") == 0);
-    assert(argv[6] == NULL);
+    assert(strcmp(argv[4], "grub2-pc") == 0);
+    assert(strcmp(argv[5], "--source") == 0);
+    assert(strcmp(argv[6], "fedora") == 0);
+    assert(strcmp(argv[7], "-y") == 0);
+    assert(argv[8] == NULL);
 }
 
 static void test_confirmation_phrase_matches_exact_disk_phrase(void)
@@ -225,7 +229,7 @@ static void test_grub_mkconfig_command_targets_mounted_root(void)
     char out[512];
 
     assert(installer_build_grub_mkconfig_command("/mnt/root", out, sizeof(out)) == 0);
-    assert(strcmp(out, "chroot /mnt/root /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg") == 0);
+    assert(strcmp(out, "chroot /mnt/root /usr/bin/grub2-mkconfig -o /boot/grub/grub.cfg") == 0);
 }
 
 static void test_default_grub_config_keeps_kms_enabled(void)
@@ -246,7 +250,7 @@ static void test_copy_grub_mkconfig_command_installs_target_file(void)
     char out[512];
 
     assert(installer_build_copy_grub_mkconfig_command("/mnt/root", out, sizeof(out)) == 0);
-    assert(strcmp(out, "mkdir -p /mnt/root/usr/sbin && cp -f /usr/sbin/grub-mkconfig /mnt/root/usr/sbin/grub-mkconfig && chmod 755 /mnt/root/usr/sbin/grub-mkconfig") == 0);
+    assert(strcmp(out, "test -x /mnt/root/usr/bin/grub2-mkconfig") == 0);
 }
 
 static void test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems(void)
