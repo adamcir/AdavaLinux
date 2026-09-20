@@ -359,6 +359,23 @@ int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size
     return written >= 0 && (size_t)written < out_size ? 0 : -1;
 }
 
+int installer_build_grub_compat_config_command(const char *root, char *out, size_t out_size)
+{
+    int written;
+
+    if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
+        return -1;
+    }
+
+    written = snprintf(out, out_size,
+                       "mkdir -p %s/boot/grub2 %s/boot/grub && "
+                       "test -s %s/boot/grub2/grub.cfg && "
+                       "cp -f %s/boot/grub2/grub.cfg %s/boot/grub/grub.cfg && "
+                       "test -s %s/boot/grub/grub.cfg",
+                       root, root, root, root, root, root);
+    return written >= 0 && (size_t)written < out_size ? 0 : -1;
+}
+
 int installer_build_prepare_grub_chroot_command(const char *root, char *out, size_t out_size)
 {
     int written;
