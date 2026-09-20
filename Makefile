@@ -284,10 +284,15 @@ copy_syspckg_runtime_from_sysroot() {
   [ -f "$$ROOTFS_DIR/usr/lib/rpm/rpmrc" ] || die "RPM runtime is missing /usr/lib/rpm/rpmrc"
   [ -f "$$ROOTFS_DIR/usr/lib/rpm/macros" ] || die "RPM runtime is missing /usr/lib/rpm/macros"
 
-  if [ -d "$$SYSPCKG_SYSROOT/etc/ssl" ]; then
-    mkdir -p "$$ROOTFS_DIR/etc/ssl"
-    cp -a "$$SYSPCKG_SYSROOT/etc/ssl/." "$$ROOTFS_DIR/etc/ssl/"
+  if [ -d "$SYSPCKG_SYSROOT/etc/ssl" ]; then
+    mkdir -p "$ROOTFS_DIR/etc/ssl"
+    cp -a "$SYSPCKG_SYSROOT/etc/ssl/." "$ROOTFS_DIR/etc/ssl/"
   fi
+  [ -f "$SYSPCKG_SYSROOT/etc/ssl/certs/ca-certificates.crt" ] || \
+    die "libdnf5 sysroot is missing CA bundle"
+  cp -aL "$SYSPCKG_SYSROOT/etc/ssl/certs/ca-certificates.crt" \
+    "$private_lib/ca-certificates.crt"
+  chmod 644 "$private_lib/ca-certificates.crt"
   if [ -d "$$SYSPCKG_SYSROOT/usr/share/ca-certificates" ]; then
     mkdir -p "$$ROOTFS_DIR/usr/share/ca-certificates"
     cp -a "$$SYSPCKG_SYSROOT/usr/share/ca-certificates/." "$$ROOTFS_DIR/usr/share/ca-certificates/"
@@ -555,7 +560,9 @@ iso:
 	printf '%s\n' \
 	  '#!/bin/sh' \
 	  'export PATH=/usr/bin:/bin' \
-	  'exec /usr/lib/syspckg/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg /usr/libexec/syspckg/syspckg.real "$$@"' \
+	  'export SSL_CERT_FILE=/usr/lib/syspckg/ca-certificates.crt' \
+	  'export CURL_CA_BUNDLE=/usr/lib/syspckg/ca-certificates.crt' \
+	  'exec /usr/lib/syspckg/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg /usr/libexec/syspckg/syspckg.real "$@"' \
 	  > "$$ROOTFS_DIR/usr/bin/syspckg"
 	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg"
 	ln -sf /usr/bin/syspckg "$$ROOTFS_DIR/bin/syspckg"
