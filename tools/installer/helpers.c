@@ -321,7 +321,7 @@ int installer_build_grub_mkconfig_command(const char *root, char *out, size_t ou
     if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
         return -1;
     }
-    written = snprintf(out, out_size, "chroot %s /usr/bin/grub2-mkconfig -o /boot/grub/grub.cfg", root);
+    written = snprintf(out, out_size, "chroot %s /usr/bin/grub2-mkconfig -o /boot/grub2/grub.cfg", root);
     return written >= 0 && (size_t)written < out_size ? 0 : -1;
 }
 
