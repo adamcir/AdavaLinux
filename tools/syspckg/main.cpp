@@ -1183,6 +1183,37 @@ void ensure_rpm_database() {
     log_ok("RPM database initialized: " + rpmdb_sqlite.string());
 }
 
+void check_private_ca_bundle() {
+    const std::filesystem::path ca_bundle{"/usr/lib/syspckg/ca-certificates.crt"};
+
+    if (!std::filesystem::exists(ca_bundle)) {
+        throw std::runtime_error(
+            "SystemPackager CA bundle is missing: " + ca_bundle.string());
+    }
+
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(ca_bundle, ec);
+    if (ec || size < 1024) {
+        throw std::runtime_error(
+            "SystemPackager CA bundle is unreadable or invalid: " + ca_bundle.string());
+    }
+
+    if (access(ca_bundle.c_str(), R_OK) != 0) {
+        throw std::runtime_error(
+            "SystemPackager CA bundle is not readable: " + ca_bundle.string());
+    }
+
+    if (setenv("SSL_CERT_FILE", ca_bundle.c_str(), 1) != 0 ||
+        setenv("CURL_CA_BUNDLE", ca_bundle.c_str(), 1) != 0) {
+        throw std::runtime_error(
+            "Unable to configure SystemPackager CA bundle environment");
+    }
+
+    log_info(
+        "TLS CA bundle: " + ca_bundle.string() +
+        " (" + std::to_string(size) + " bytes)");
+}
+
 void check_runtime_layout() {
     if (!std::filesystem::exists("/usr/lib/rpm/rpmrc")) {
         throw std::runtime_error("RPM configuration is missing: /usr/lib/rpm/rpmrc");
@@ -1190,6 +1221,7 @@ void check_runtime_layout() {
     if (!std::filesystem::exists("/usr/lib/rpm/macros")) {
         throw std::runtime_error("RPM macros are missing: /usr/lib/rpm/macros");
     }
+    check_private_ca_bundle();
     if (access("/usr/bin/gpg", X_OK) != 0) {
         throw std::runtime_error("OpenPGP engine is missing: /usr/bin/gpg");
     }
@@ -1712,8 +1744,30 @@ void finalize_fedora_bootstrap() {
 
     restore_adavalinux_core_files();
     activate_fedora_runtime();
+    check_private_ca_bundle();
 
     std::error_code ec;
+
+    // Keep the conventional Debian CA path usable too.  The private bundle is
+    // authoritative for SystemPackager, so Fedora package changes under /etc
+    // cannot break libcurl again.
+    std::filesystem::create_directories("/etc/ssl/certs", ec);
+    if (!ec) {
+        const std::filesystem::path compat_ca{"/etc/ssl/certs/ca-certificates.crt"};
+        std::filesystem::copy_file(
+            "/usr/lib/syspckg/ca-certificates.crt",
+            compat_ca,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+        if (ec) {
+            log_warn(
+                "Unable to refresh compatibility CA bundle " +
+                compat_ca.string() + ": " + ec.message());
+            ec.clear();
+        } else {
+            log_ok("Compatibility CA bundle refreshed: " + compat_ca.string());
+        }
+    }
     std::filesystem::create_directories("/var/lib/syspckg", ec);
     if (ec) {
         throw std::runtime_error(
