@@ -293,6 +293,52 @@ static int resolve_grub_platform_dir(const char *platform, char *out, size_t out
     return -1;
 }
 
+static int sync_target_resolver(InstallerLogFn log_fn, void *ctx)
+{
+    FILE *src;
+    char buffer[4096];
+    size_t used = 0;
+    size_t got;
+
+    src = fopen("/etc/resolv.conf", "r");
+    if (src != NULL) {
+        while (used + 1 < sizeof(buffer) &&
+               (got = fread(buffer + used, 1, sizeof(buffer) - used - 1, src)) > 0) {
+            used += got;
+        }
+        fclose(src);
+    }
+
+    if (used == 0) {
+        static const char fallback[] =
+            "nameserver 10.0.2.3\n"
+            "nameserver 1.1.1.1\n"
+            "nameserver 8.8.8.8\n"
+            "options timeout:2 attempts:2 rotate\n";
+
+        if (sizeof(fallback) > sizeof(buffer)) {
+            emit_log(log_fn, ctx, "Internal resolver fallback is too large");
+            return -1;
+        }
+        memcpy(buffer, fallback, sizeof(fallback));
+        used = sizeof(fallback) - 1;
+        emit_log(log_fn, ctx, "Live resolver unavailable; using installer DNS fallback");
+    }
+
+    buffer[used] = '\0';
+
+    if (shell_checked("mkdir -p " ROOT_MNT "/etc", log_fn, ctx) != 0) {
+        return -1;
+    }
+    if (installer_write_file(ROOT_MNT "/etc/resolv.conf", buffer) != 0) {
+        emit_log(log_fn, ctx, "Failed to write target /etc/resolv.conf: %s", strerror(errno));
+        return -1;
+    }
+
+    emit_log(log_fn, ctx, "Target DNS resolver synchronized from live installer");
+    return 0;
+}
+
 static int install_grub_pkg(const char *pkg, const char *target_root, InstallerLogFn log_fn, void *ctx)
 {
     int target_install = target_root != NULL && target_root[0] != '\0';
@@ -732,6 +778,9 @@ int installer_run_install(const InstallerConfig *cfg,
     }
 
     step(progress_fn, ctx, 72, "Installing target GRUB package");
+    if (sync_target_resolver(log_fn, ctx) != 0) {
+        return 1;
+    }
     if (boot_uefi) {
         if (install_grub_pkg("grub2-efi-x64", ROOT_MNT, log_fn, ctx) != 0 ||
             install_grub_pkg("grub2-efi-x64-modules", ROOT_MNT, log_fn, ctx) != 0) {
