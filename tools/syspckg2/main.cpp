@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -223,6 +224,11 @@ public:
                         } else if (!processing) {
                             details.push_back(repo_id + " waiting");
                         } else {
+                            if (failed_repositories_.contains(repo_id)) {
+                                details.push_back(repo_id + " FAILED");
+                                continue;
+                            }
+
                             const auto plan_it = plans_.find(repo_id);
                             const std::size_t repo_total =
                                 plan_it == plans_.end() ? 0 : plan_it->second.size();
@@ -319,6 +325,10 @@ public:
                 if (success && state.total > 0.0) {
                     state.downloaded = state.total;
                 }
+                if (!success) {
+                    failed_repositories_.insert(repo_id);
+                    recalculate_processing_total_locked();
+                }
                 count_it = true;
             }
         }
@@ -375,6 +385,9 @@ public:
         std::lock_guard<std::mutex> lock(state_mutex_);
         processing_started_ = true;
         for (const auto & [repo_id, items] : plans_) {
+            if (failed_repositories_.contains(repo_id)) {
+                continue;
+            }
             for (const auto & item : items) {
                 processed_items_.insert(repo_id + "\n" + item);
             }
@@ -411,7 +424,9 @@ private:
     void recalculate_processing_total_locked() {
         processing_total_ = 0;
         for (const auto & [repo_id, items] : plans_) {
-            (void)repo_id;
+            if (failed_repositories_.contains(repo_id)) {
+                continue;
+            }
             processing_total_ += items.size();
         }
     }
@@ -427,6 +442,7 @@ private:
     bool processing_started_{false};
     std::size_t processing_total_{0};
     std::set<std::string> processed_items_;
+    std::set<std::string> failed_repositories_;
     std::unordered_map<std::string, std::size_t> processed_per_repo_;
     std::string current_processing_item_;
 
@@ -728,6 +744,11 @@ private:
                     if (metadata_activity_) {
                         metadata_activity_->repository_finished(result_key, true);
                     }
+                } else if (state && state->archive_total > 0) {
+                    log_info(
+                        "Archive " + std::to_string(state->archive_index) + "/" +
+                        std::to_string(state->archive_total) +
+                        " cache hit: " + description);
                 } else {
                     log_info("Fetch cache hit: " + description);
                 }
@@ -738,7 +759,16 @@ private:
                 if (state && state->repository_metadata && metadata_activity_) {
                     metadata_activity_->repository_finished(result_key, false);
                 }
-                log_warn("Fetch failed: " + description + " -> " + result.last_error);
+                if (state && state->archive_total > 0) {
+                    log_warn(
+                        "Archive " + std::to_string(state->archive_index) + "/" +
+                        std::to_string(state->archive_total) +
+                        " failed after attempt " + std::to_string(state->attempt) + "/" +
+                        std::to_string(MAX_MIRROR_TRIES) + ": " + description +
+                        " -> " + result.last_error);
+                } else {
+                    log_warn("Fetch failed: " + description + " -> " + result.last_error);
+                }
 
                 if (
                     result.last_error.find("Failed writing") != std::string::npos ||
