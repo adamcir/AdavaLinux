@@ -339,7 +339,12 @@ int installer_build_default_grub_config(const char *root_arg,
     extra = acpi_mode == INSTALLER_ACPI_OFF ? " acpi=off noapic nolapic irqpoll pci=nomsi" : "";
     written = snprintf(out, out_size,
                        "GRUB_TIMEOUT=10\n"
+                       "GRUB_TIMEOUT_STYLE=menu\n"
                        "GRUB_DEFAULT=0\n"
+                       "GRUB_TERMINAL_INPUT=console\n"
+                       "GRUB_TERMINAL_OUTPUT=gfxterm\n"
+                       "GRUB_GFXMODE=1024x768x32,1024x768,800x600,auto\n"
+                       "GRUB_GFXPAYLOAD_LINUX=keep\n"
                        "GRUB_CMDLINE_LINUX=\"%s rootfstype=ext4 rootwait rootdelay=5 rw console=ttyS0 console=tty1 libata.force=noncq%s\"\n"
                        "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n",
                        root_arg, extra);
