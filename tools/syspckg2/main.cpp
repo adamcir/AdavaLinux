@@ -12,6 +12,8 @@
 #include <libdnf5/utils/locker.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -19,9 +21,11 @@
 #include <iostream>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -42,21 +46,108 @@ constexpr int MAX_MIRROR_TRIES = 3;
 constexpr std::uint32_t MAX_PARALLEL_DOWNLOADS = 8;
 constexpr std::uint32_t MAX_DOWNLOADS_PER_MIRROR = 4;
 
+std::mutex console_mutex;
+bool status_line_active = false;
+
+bool interactive_terminal() {
+    return isatty(STDOUT_FILENO) != 0;
+}
+
+void clear_status_line_locked() {
+    if (!status_line_active || !interactive_terminal()) {
+        return;
+    }
+    std::cout << "\r\033[2K" << std::flush;
+    status_line_active = false;
+}
+
+void render_status_line(const std::string & message) {
+    if (!interactive_terminal()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(console_mutex);
+    std::cout << "\r\033[2K" << message << std::flush;
+    status_line_active = true;
+}
+
+void log_line(std::ostream & stream, const char * color, const char * prefix, const std::string & message) {
+    std::lock_guard<std::mutex> lock(console_mutex);
+    clear_status_line_locked();
+    stream << color << prefix << COLOR_RESET << message << "\n" << std::flush;
+}
+
 void log_err(const std::string & message) {
-    std::cerr << COLOR_RED << "ERR: " << COLOR_RESET << message << "\n";
+    log_line(std::cerr, COLOR_RED, "ERR: ", message);
 }
 
 void log_warn(const std::string & message) {
-    std::cerr << COLOR_YELLOW << "WARN: " << COLOR_RESET << message << "\n";
+    log_line(std::cerr, COLOR_YELLOW, "WARN: ", message);
 }
 
 void log_ok(const std::string & message) {
-    std::cout << COLOR_GREEN << "OK: " << COLOR_RESET << message << "\n";
+    log_line(std::cout, COLOR_GREEN, "OK: ", message);
 }
 
 void log_info(const std::string & message) {
-    std::cout << COLOR_CYAN << "INFO: " << COLOR_RESET << message << "\n";
+    log_line(std::cout, COLOR_CYAN, "INFO: ", message);
 }
+
+std::string elapsed_string(std::chrono::steady_clock::duration elapsed) {
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    std::ostringstream out;
+    if (milliseconds < 1000) {
+        out << milliseconds << " ms";
+    } else {
+        out << std::fixed << std::setprecision(1) << (milliseconds / 1000.0) << " s";
+    }
+    return out.str();
+}
+
+class ActivitySpinner {
+public:
+    explicit ActivitySpinner(std::string message) : message_(std::move(message)) {
+        if (!interactive_terminal()) {
+            log_info(message_ + "...");
+            return;
+        }
+
+        running_.store(true);
+        worker_ = std::thread([this]() {
+            static constexpr char frames[] = {'|', '/', '-', '\\'};
+            std::size_t frame = 0;
+            while (running_.load()) {
+                render_status_line(
+                    std::string(COLOR_CYAN) + frames[frame++ % 4] + COLOR_RESET + " " + message_ + "...");
+                std::this_thread::sleep_for(std::chrono::milliseconds(90));
+            }
+        });
+    }
+
+    ActivitySpinner(const ActivitySpinner &) = delete;
+    ActivitySpinner & operator=(const ActivitySpinner &) = delete;
+
+    ~ActivitySpinner() {
+        stop();
+    }
+
+    void stop() {
+        if (!running_.exchange(false)) {
+            return;
+        }
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+
+        std::lock_guard<std::mutex> lock(console_mutex);
+        clear_status_line_locked();
+    }
+
+private:
+    std::string message_;
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+};
 
 std::string format_bytes(double bytes) {
     if (bytes <= 0.0) {
@@ -75,6 +166,10 @@ std::string format_bytes(double bytes) {
     return out.str();
 }
 
+struct RepoFetchContext {
+    std::string repo_id;
+};
+
 class VerboseDownloadCallbacks : public libdnf5::repo::DownloadCallbacks {
 public:
     struct Result {
@@ -91,24 +186,65 @@ public:
 private:
     struct DownloadState {
         std::string description;
+        std::string result_key;
+        bool repository_metadata{false};
         double total{0.0};
         int last_bucket{-10};
+        std::size_t spinner_frame{0};
     };
+
+    std::string progress_bar(const DownloadState & state, double downloaded, double total_to_download) const {
+        static constexpr int width = 28;
+        int percent = total_to_download > 0.0
+            ? static_cast<int>((downloaded * 100.0) / total_to_download)
+            : 0;
+        percent = std::clamp(percent, 0, 100);
+        const int filled = (percent * width) / 100;
+
+        std::string bar;
+        bar.reserve(width);
+        for (int i = 0; i < width; ++i) {
+            bar += i < filled ? '#' : '-';
+        }
+
+        static constexpr char frames[] = {'|', '/', '-', '\\'};
+        const char spinner = frames[state.spinner_frame % 4];
+
+        std::ostringstream out;
+        out << COLOR_CYAN << spinner << COLOR_RESET << " "
+            << state.description << " "
+            << COLOR_GREEN << "[" << bar << "]" << COLOR_RESET << " "
+            << std::setw(3) << percent << "%";
+
+        if (total_to_download > 0.0) {
+            out << "  " << format_bytes(downloaded) << "/" << format_bytes(total_to_download);
+        }
+
+        return out.str();
+    }
 
     void * add_new_download(
         [[maybe_unused]] void * user_data,
         const char * description,
         double total_to_download) override {
+        const auto * repo_context = static_cast<const RepoFetchContext *>(user_data);
+        const std::string label = description ? description : "(unknown download)";
+
         downloads_.push_back(DownloadState{
-            description ? description : "(unknown download)",
+            label,
+            repo_context ? repo_context->repo_id : label,
+            repo_context != nullptr,
             total_to_download,
             -10,
+            0,
         });
         auto & state = downloads_.back();
 
-        log_info(
-            "Fetch start: " + state.description +
-            " (" + format_bytes(total_to_download) + ")");
+        if (interactive_terminal()) {
+            render_status_line(progress_bar(state, 0.0, total_to_download));
+        } else {
+            log_info("Fetch start: " + state.description + " (" + format_bytes(total_to_download) + ")");
+        }
         return &state;
     }
 
@@ -121,8 +257,11 @@ private:
         int percent = static_cast<int>((downloaded * 100.0) / total_to_download);
         percent = std::clamp(percent, 0, 100);
         const int bucket = (percent / 10) * 10;
+        ++state->spinner_frame;
 
-        if (bucket >= state->last_bucket + 10) {
+        if (interactive_terminal()) {
+            render_status_line(progress_bar(*state, downloaded, total_to_download));
+        } else if (bucket >= state->last_bucket + 10) {
             state->last_bucket = bucket;
             log_info(
                 "Fetch progress: " + state->description + " " +
@@ -136,16 +275,27 @@ private:
     int end(void * user_cb_data, TransferStatus status, const char * msg) override {
         auto * state = static_cast<DownloadState *>(user_cb_data);
         const std::string description = state ? state->description : "(unknown download)";
-        auto & result = results_[description];
+        const std::string result_key = state ? state->result_key : description;
+        auto & result = results_[result_key];
+
+        if (state && interactive_terminal() && status != TransferStatus::ERROR) {
+            render_status_line(progress_bar(*state, state->total, state->total));
+        }
 
         switch (status) {
             case TransferStatus::SUCCESSFUL:
                 ++result.successful;
                 log_ok("Fetch complete: " + description);
+                if (state && state->repository_metadata) {
+                    log_info("Processing repository metadata: " + description + "...");
+                }
                 break;
             case TransferStatus::ALREADYEXISTS:
                 ++result.successful;
                 log_info("Fetch cache hit: " + description);
+                if (state && state->repository_metadata) {
+                    log_info("Using cached repository metadata: " + description);
+                }
                 break;
             case TransferStatus::ERROR: {
                 ++result.failed;
@@ -381,6 +531,7 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
     }
 
     std::vector<std::string> enabled_repo_ids;
+    std::list<RepoFetchContext> repo_fetch_contexts;
     {
         libdnf5::repo::RepoQuery repos(base);
         for (auto repo : repos) {
@@ -390,6 +541,8 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
             const auto repo_id = repo->get_id();
             enabled_repo_ids.push_back(repo_id);
+            repo_fetch_contexts.push_back(RepoFetchContext{repo_id});
+            repo->set_user_data(&repo_fetch_contexts.back());
 
             auto & repo_config = repo->get_config();
             repo_config.get_skip_if_unavailable_option().set(true);
@@ -428,7 +581,11 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         libdnf5::utils::LockBlocking::BLOCKING);
 
     log_info("Loading repository metadata...");
+    const auto repo_load_started = std::chrono::steady_clock::now();
     repo_sack->load_repos();
+    log_ok(
+        "Repository metadata processed in " +
+        elapsed_string(std::chrono::steady_clock::now() - repo_load_started));
 
     std::size_t usable_repositories = 0;
     for (const auto & repo_id : enabled_repo_ids) {
@@ -508,7 +665,13 @@ void print_transaction(libdnf5::base::Transaction & transaction) {
 }
 
 int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const std::string & description) {
+    const auto resolve_started = std::chrono::steady_clock::now();
+    ActivitySpinner resolve_spinner("Resolving dependencies");
     auto transaction = goal.resolve();
+    resolve_spinner.stop();
+    log_ok(
+        "Dependencies resolved in " +
+        elapsed_string(std::chrono::steady_clock::now() - resolve_started));
 
     for (const auto & line : transaction.get_resolve_logs_as_strings()) {
         log_warn(line);
@@ -534,6 +697,7 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
 
     try {
         log_info("Downloading packages...");
+        const auto download_started = std::chrono::steady_clock::now();
         libdnf5::repo::PackageDownloader downloader(base);
         downloader.set_fail_fast(false);
 
@@ -564,9 +728,18 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
             return 3;
         }
 
-        log_ok("Download complete");
-        log_info("Running RPM transaction...");
+        log_ok(
+            "Download complete in " +
+            elapsed_string(std::chrono::steady_clock::now() - download_started));
+
+        log_info("Preparing RPM transaction...");
+        const auto transaction_started = std::chrono::steady_clock::now();
+        ActivitySpinner transaction_spinner("Running RPM transaction");
         const auto result = transaction.run();
+        transaction_spinner.stop();
+        log_info(
+            "RPM transaction finished in " +
+            elapsed_string(std::chrono::steady_clock::now() - transaction_started));
         if (result != libdnf5::base::Transaction::TransactionRunResult::SUCCESS) {
             log_err(libdnf5::base::Transaction::transaction_result_to_string(result));
             for (const auto & problem : transaction.get_transaction_problems()) {
