@@ -9,6 +9,7 @@
 #include <libdnf5/repo/repo_query.hpp>
 #include <libdnf5/repo/repo_sack.hpp>
 #include <libdnf5/rpm/package_query.hpp>
+#include <libdnf5/rpm/transaction_callbacks.hpp>
 #include <libdnf5/transaction/transaction_item_action.hpp>
 #include <libdnf5/utils/locker.hpp>
 
@@ -507,6 +508,69 @@ private:
 };
 
 SyspckgLogger * ui_logger = nullptr;
+
+class SyspckgTransactionCallbacks final : public libdnf5::rpm::TransactionCallbacks {
+public:
+    void before_begin(uint64_t total) override {
+        log_info("RPM transaction contains " + std::to_string(total) + " element(s)");
+    }
+
+    void transaction_start(uint64_t total) override {
+        log_info("Preparing " + std::to_string(total) + " RPM element(s)...");
+    }
+
+    void install_start(
+        const libdnf5::base::TransactionPackage & item,
+        [[maybe_unused]] uint64_t total) override {
+        log_info("Installing: " + item.get_package().get_full_nevra());
+    }
+
+    void uninstall_start(
+        const libdnf5::base::TransactionPackage & item,
+        [[maybe_unused]] uint64_t total) override {
+        log_info("Removing: " + item.get_package().get_full_nevra());
+    }
+
+    void unpack_error(const libdnf5::base::TransactionPackage & item) override {
+        log_err("RPM unpack failed: " + item.get_package().get_full_nevra());
+    }
+
+    void cpio_error(const libdnf5::base::TransactionPackage & item) override {
+        log_err("RPM cpio failed: " + item.get_package().get_full_nevra());
+    }
+
+    void script_start(
+        const libdnf5::base::TransactionPackage * item,
+        libdnf5::rpm::Nevra nevra,
+        ScriptType type) override {
+        const std::string package =
+            item ? item->get_package().get_full_nevra() : libdnf5::rpm::to_full_nevra_string(nevra);
+        log_info(
+            std::string("Running ") + script_type_to_string(type) +
+            " scriptlet: " + package);
+    }
+
+    void script_error(
+        const libdnf5::base::TransactionPackage * item,
+        libdnf5::rpm::Nevra nevra,
+        ScriptType type,
+        uint64_t return_code) override {
+        const std::string package =
+            item ? item->get_package().get_full_nevra() : libdnf5::rpm::to_full_nevra_string(nevra);
+        log_err(
+            std::string("Scriptlet failed: ") + script_type_to_string(type) +
+            " in " + package + " (exit " + std::to_string(return_code) + ")");
+    }
+
+    void after_complete(bool success) override {
+        if (success) {
+            log_ok("RPM transaction callbacks completed successfully");
+        } else {
+            log_err("RPM transaction callbacks reported failure");
+        }
+    }
+};
+
 
 std::string format_bytes(double bytes) {
     if (bytes <= 0.0) {
@@ -1329,6 +1393,130 @@ bool confirm_transaction(bool assume_yes) {
     return answer.empty() || answer == "y" || answer == "Y" || answer == "yes" || answer == "YES";
 }
 
+bool transaction_contains_fedora_packages(libdnf5::base::Transaction & transaction) {
+    for (const auto & item : transaction.get_transaction_packages()) {
+        if (!libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
+            continue;
+        }
+        const auto repo_id = item.get_package().get_repo_id();
+        if (repo_id == "fedora" || repo_id == "updates") {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool fedora_bootstrap_needed(libdnf5::base::Transaction & transaction) {
+    static const std::filesystem::path marker{"/var/lib/syspckg2/fedora-base.ready"};
+    return !std::filesystem::exists(marker) && transaction_contains_fedora_packages(transaction);
+}
+
+void set_bootstrap_tsflags(libdnf5::Base & base) {
+    auto & option = base.get_config().get_tsflags_option();
+    option.set(
+        libdnf5::Option::Priority::RUNTIME,
+        std::vector<std::string>{"", "noscripts", "notriggers", "nocontexts", "nocaps", "nodocs"});
+}
+
+void restore_tsflags(libdnf5::Base & base, const std::vector<std::string> & original) {
+    auto values = original;
+    values.insert(values.begin(), "");
+    base.get_config().get_tsflags_option().set(libdnf5::Option::Priority::RUNTIME, values);
+}
+
+int run_bootstrap_command(const std::string & label, const std::string & command) {
+    log_info(label + "...");
+    const int rc = std::system(command.c_str());
+    if (rc != 0) {
+        log_warn(label + " returned non-zero status; continuing");
+        return rc;
+    }
+    log_ok(label + " complete");
+    return 0;
+}
+
+void finalize_fedora_bootstrap() {
+    log_info("Finalizing Fedora-compatible base...");
+
+    std::error_code ec;
+    std::filesystem::create_directories("/var/lib/syspckg2", ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to create /var/lib/syspckg2: " + ec.message());
+    }
+
+    if (access("/usr/bin/ldconfig", X_OK) == 0) {
+        std::filesystem::create_directories("/sbin", ec);
+        ec.clear();
+        if (!std::filesystem::exists("/sbin/ldconfig")) {
+            std::filesystem::create_symlink("../usr/bin/ldconfig", "/sbin/ldconfig", ec);
+            ec.clear();
+        }
+        run_bootstrap_command("Rebuilding dynamic linker cache", "/usr/bin/ldconfig");
+    } else {
+        log_warn("Fedora ldconfig was not installed during bootstrap");
+    }
+
+    if (access("/usr/bin/iconvconfig", X_OK) == 0) {
+        std::filesystem::create_directories("/usr/sbin", ec);
+        ec.clear();
+        if (!std::filesystem::exists("/usr/sbin/iconvconfig")) {
+            std::filesystem::create_symlink("../bin/iconvconfig", "/usr/sbin/iconvconfig", ec);
+            ec.clear();
+        }
+
+        if (std::filesystem::exists("/usr/lib64/gconv/gconv-modules")) {
+            run_bootstrap_command(
+                "Rebuilding gconv cache",
+                "/usr/bin/iconvconfig -o /usr/lib64/gconv/gconv-modules.cache "
+                "--nostdlib /usr/lib64/gconv");
+        }
+    } else {
+        log_warn("Fedora iconvconfig was not installed during bootstrap");
+    }
+
+    std::ofstream marker("/var/lib/syspckg2/fedora-base.ready", std::ios::out | std::ios::trunc);
+    if (!marker) {
+        throw std::runtime_error("Unable to write Fedora bootstrap marker");
+    }
+    marker << "ready\n";
+    marker.close();
+
+    log_ok("Fedora-compatible RPM base bootstrap completed");
+}
+
+void print_rpm_failure_details(libdnf5::base::Transaction & transaction) {
+    const auto script_output = transaction.get_last_script_output();
+    if (!script_output.empty()) {
+        log_err("Last RPM scriptlet output:");
+        std::istringstream input(script_output);
+        std::string line;
+        while (std::getline(input, line)) {
+            if (!line.empty()) {
+                std::cerr << "  " << COLOR_RED << line << COLOR_RESET << "\n";
+            }
+        }
+    }
+
+    for (const auto & message : transaction.get_rpm_messages()) {
+        if (!message.empty()) {
+            std::cerr << "  " << COLOR_RED << "RPM: " << message << COLOR_RESET << "\n";
+        }
+    }
+
+    for (const auto & problem : transaction.get_transaction_problems()) {
+        if (!problem.empty()) {
+            std::cerr << "  " << COLOR_RED << problem << COLOR_RESET << "\n";
+        }
+    }
+
+    for (const auto & problem : transaction.get_gpg_signature_problems()) {
+        if (!problem.empty()) {
+            std::cerr << "  " << COLOR_RED << "GPG: " << problem << COLOR_RESET << "\n";
+        }
+    }
+}
+
 void print_transaction(libdnf5::base::Transaction & transaction) {
     const auto packages = transaction.get_transaction_packages();
     if (packages.empty()) {
@@ -1358,7 +1546,12 @@ void print_transaction(libdnf5::base::Transaction & transaction) {
     std::cout << "\n";
 }
 
-int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const std::string & description) {
+int run_goal(
+    libdnf5::Base & base,
+    libdnf5::Goal & goal,
+    bool assume_yes,
+    const std::string & description,
+    bool allow_fedora_bootstrap = false) {
     const auto resolve_started = std::chrono::steady_clock::now();
     ActivitySpinner resolve_spinner("Resolving dependencies");
     auto transaction = goal.resolve();
@@ -1388,6 +1581,17 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
     }
 
     transaction.set_description(description);
+    transaction.set_callbacks(std::make_unique<SyspckgTransactionCallbacks>());
+
+    const bool bootstrap_mode = allow_fedora_bootstrap && fedora_bootstrap_needed(transaction);
+    const auto original_tsflags = base.get_config().get_tsflags_option().get_value();
+
+    if (bootstrap_mode) {
+        log_warn(
+            "First Fedora RPM transaction detected; using AdavaLinux bootstrap mode "
+            "(scriptlets/triggers disabled for the initial base only)");
+        set_bootstrap_tsflags(base);
+    }
 
     try {
         log_info("Downloading packages...");
@@ -1475,18 +1679,33 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
         ActivitySpinner transaction_spinner("Running RPM transaction");
         const auto result = transaction.run();
         transaction_spinner.stop();
+
+        if (bootstrap_mode) {
+            restore_tsflags(base, original_tsflags);
+        }
+
         log_info(
             "RPM transaction finished in " +
             elapsed_string(std::chrono::steady_clock::now() - transaction_started));
+
         if (result != libdnf5::base::Transaction::TransactionRunResult::SUCCESS) {
             log_err(libdnf5::base::Transaction::transaction_result_to_string(result));
-            for (const auto & problem : transaction.get_transaction_problems()) {
-                std::cerr << "  " << COLOR_RED << problem << COLOR_RESET << "\n";
-            }
+            print_rpm_failure_details(transaction);
             return 3;
         }
+
+        if (bootstrap_mode) {
+            finalize_fedora_bootstrap();
+        }
     } catch (const std::exception & ex) {
+        if (bootstrap_mode) {
+            try {
+                restore_tsflags(base, original_tsflags);
+            } catch (...) {
+            }
+        }
         log_err(ex.what());
+        print_rpm_failure_details(transaction);
         return 3;
     }
 
@@ -1509,7 +1728,7 @@ int command_install(libdnf5::Base & base, const Options & opts) {
     for (const auto & spec : opts.args) {
         goal.add_rpm_install(spec, settings);
     }
-    return run_goal(base, goal, opts.assume_yes, "syspckg2 install");
+    return run_goal(base, goal, opts.assume_yes, "syspckg2 install", true);
 }
 
 int command_remove(libdnf5::Base & base, const Options & opts) {
