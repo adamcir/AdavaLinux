@@ -253,6 +253,16 @@ static void test_copy_grub_mkconfig_command_installs_target_file(void)
     assert(strcmp(out, "test -x /mnt/root/usr/bin/grub2-mkconfig") == 0);
 }
 
+static void test_grub_compat_config_command_covers_both_prefixes(void)
+{
+    char out[768];
+
+    assert(installer_build_grub_compat_config_command("/mnt/root", out, sizeof(out)) == 0);
+    assert(strstr(out, "/mnt/root/boot/grub2/grub.cfg") != NULL);
+    assert(strstr(out, "/mnt/root/boot/grub/grub.cfg") != NULL);
+    assert(strstr(out, "cp -f") != NULL);
+}
+
 static void test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems(void)
 {
     char out[512];
@@ -319,6 +329,7 @@ int main(void)
     test_grub_mkconfig_command_targets_mounted_root();
     test_default_grub_config_keeps_kms_enabled();
     test_copy_grub_mkconfig_command_installs_target_file();
+    test_grub_compat_config_command_covers_both_prefixes();
     test_prepare_grub_chroot_mounts_command_mounts_runtime_filesystems();
     test_disable_standard_grub_generators_command_keeps_adavalinux_only();
     test_uefi_removable_fallback_command_creates_bootx64();
