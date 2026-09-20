@@ -2230,7 +2230,7 @@ int main(int argc, char ** argv) {
             return 0;
         }
         if (first == "--version") {
-            std::cout << VERSION << "\n";
+            std::cout << VERSION << " (AdavaLinux)\n";
             return 0;
         }
     }
