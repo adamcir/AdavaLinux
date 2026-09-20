@@ -668,14 +668,7 @@ iso:
 	  > "$$ROOTFS_DIR/usr/bin/syspckg2"
 	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg2"
 	ln -sf /usr/bin/syspckg2 "$$ROOTFS_DIR/bin/syspckg2"
-	say "Copying runtime loader + libraries for SystemPackager 1 and private libdnf5 SystemPackager 2"
-	if [ -f /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]; then
-	  copy_one_lib "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
-	  ln -sf ../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$$ROOTFS_DIR/lib64/ld-linux-x86-64.so.2"
-	else
-	  ensure_amd64_sysroot
-	  prepare_syspckg_runtime_from_sysroot
-	fi
+	say "Installing private libdnf5 runtime for SystemPackager 2"
 	copy_syspckg2_runtime_from_sysroot
 	say "Copying minimal terminfo into rootfs"
 	if [ -d /usr/share/terminfo ]; then
@@ -689,12 +682,11 @@ iso:
 	    cp -a /usr/share/terminfo/x/xterm-256color "$$ROOTFS_DIR/usr/share/terminfo/x/" 2>/dev/null || true
 	  fi
 	fi
-	if [ "$$HOST_ARCH" = "x86_64" ]; then
-	  copy_deps_for_binary "$$ROOTFS_DIR/usr/bin/syspckg"
-	else
-	  ensure_amd64_sysroot
-	  prepare_syspckg_runtime_from_sysroot
-	fi
+	SYSPCKG_LINK_INFO="$(file -b "$ROOTFS_DIR/usr/bin/syspckg" 2>/dev/null || true)"
+	case "$SYSPCKG_LINK_INFO" in
+	  *"statically linked"*) say "Legacy SystemPackager is static -> no global libc runtime needed" ;;
+	  *) die "Legacy syspckg must be statically linked before Fedora RPM bootstrap: $SYSPCKG_LINK_INFO" ;;
+	esac
 	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" ]; then
 	  say "Copying syspckg source config into rootfs"
 	  mkdir -p "$$ROOTFS_DIR/etc" "$$ROOTFS_DIR/etc/syspckg"
