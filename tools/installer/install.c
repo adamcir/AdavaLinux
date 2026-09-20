@@ -457,6 +457,80 @@ static int detect_media(const InstallerConfig *cfg, char *media_dev, size_t medi
     return -1;
 }
 
+static int upsert_colon_record(const char *path, const char *name, const char *record)
+{
+    char tmp_path[PATH_MAX];
+    char line[2048];
+    size_t name_len;
+    FILE *in = NULL;
+    FILE *out = NULL;
+    int rc = -1;
+
+    if (path == NULL || name == NULL || record == NULL ||
+        name[0] == '\0' || strchr(name, ':') != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (snprintf(tmp_path, sizeof(tmp_path), "%s.adava-new", path) >= (int)sizeof(tmp_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    out = fopen(tmp_path, "w");
+    if (out == NULL) {
+        return -1;
+    }
+
+    name_len = strlen(name);
+    in = fopen(path, "r");
+    if (in != NULL) {
+        while (fgets(line, sizeof(line), in) != NULL) {
+            if (strncmp(line, name, name_len) == 0 && line[name_len] == ':') {
+                continue;
+            }
+            if (fputs(line, out) == EOF) {
+                goto done;
+            }
+        }
+        if (ferror(in)) {
+            goto done;
+        }
+    } else if (errno != ENOENT) {
+        goto done;
+    }
+
+    if (fputs(record, out) == EOF) {
+        goto done;
+    }
+    if (fflush(out) != 0) {
+        goto done;
+    }
+    if (fclose(out) != 0) {
+        out = NULL;
+        goto done;
+    }
+    out = NULL;
+
+    if (rename(tmp_path, path) != 0) {
+        goto done;
+    }
+
+    rc = 0;
+
+done:
+    if (in != NULL) {
+        fclose(in);
+    }
+    if (out != NULL) {
+        fclose(out);
+    }
+    if (rc != 0) {
+        unlink(tmp_path);
+    }
+    return rc;
+}
+
 static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, void *ctx)
 {
     char user_hash[256];
@@ -491,22 +565,53 @@ static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, v
         }
     }
 
-    snprintf(content, sizeof(content),
-             "root:x:0:0:root:/root:/bin/sh\n"
-             "%s:x:1000:1000:%s:/home/%s:/bin/sh\n",
+    snprintf(content, sizeof(content), "root:x:0:0:root:/root:/bin/sh\n");
+    if (upsert_colon_record(ROOT_MNT "/etc/passwd", "root", content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update root passwd entry: %s", strerror(errno));
+        return -1;
+    }
+    snprintf(content, sizeof(content), "%s:x:1000:1000:%s:/home/%s:/bin/sh\n",
              cfg->username, cfg->username, cfg->username);
-    if (installer_write_file(ROOT_MNT "/etc/passwd", content) != 0) {
+    if (upsert_colon_record(ROOT_MNT "/etc/passwd", cfg->username, content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update user passwd entry: %s", strerror(errno));
         return -1;
     }
-    snprintf(content, sizeof(content),
-             "root:%s:%ld:0:99999:7:::\n"
-             "%s:%s:%ld:0:99999:7:::\n",
-             root_hash, password_change_day, cfg->username, user_hash, password_change_day);
-    if (installer_write_file(ROOT_MNT "/etc/shadow", content) != 0) {
+
+    snprintf(content, sizeof(content), "root:%s:%ld:0:99999:7:::\n",
+             root_hash, password_change_day);
+    if (upsert_colon_record(ROOT_MNT "/etc/shadow", "root", content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update root shadow entry: %s", strerror(errno));
         return -1;
     }
-    snprintf(content, sizeof(content), "root:x:0:\n%s:x:1000:\n", cfg->username);
-    if (installer_write_file(ROOT_MNT "/etc/group", content) != 0) {
+    snprintf(content, sizeof(content), "%s:%s:%ld:0:99999:7:::\n",
+             cfg->username, user_hash, password_change_day);
+    if (upsert_colon_record(ROOT_MNT "/etc/shadow", cfg->username, content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update user shadow entry: %s", strerror(errno));
+        return -1;
+    }
+
+    snprintf(content, sizeof(content), "root:x:0:\n");
+    if (upsert_colon_record(ROOT_MNT "/etc/group", "root", content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update root group entry: %s", strerror(errno));
+        return -1;
+    }
+    snprintf(content, sizeof(content), "%s:x:1000:\n", cfg->username);
+    if (upsert_colon_record(ROOT_MNT "/etc/group", cfg->username, content) != 0) {
+        emit_log(log_fn, ctx, "Failed to update user group entry: %s", strerror(errno));
+        return -1;
+    }
+
+    if (installer_write_file(
+            ROOT_MNT "/etc/securetty",
+            "console\n"
+            "tty1\n"
+            "tty2\n"
+            "tty3\n"
+            "tty4\n"
+            "tty5\n"
+            "tty6\n"
+            "ttyS0\n") != 0) {
+        emit_log(log_fn, ctx, "Failed to write /etc/securetty: %s", strerror(errno));
         return -1;
     }
     snprintf(content, sizeof(content), "%s\n", cfg->hostname);
@@ -519,6 +624,11 @@ static int write_user_files(const InstallerConfig *cfg, InstallerLogFn log_fn, v
     }
     (void)installer_run_command(chmod_passwd, log_fn, ctx);
     (void)installer_run_command(chmod_shadow, log_fn, ctx);
+    {
+        char *const chmod_securetty[] = { "chmod", "644", ROOT_MNT "/etc/securetty", NULL };
+        (void)installer_run_command(chmod_securetty, log_fn, ctx);
+    }
+    emit_log(log_fn, ctx, "Root and user credentials written after RPM transactions");
     return 0;
 }
 
@@ -776,10 +886,23 @@ int installer_run_install(const InstallerConfig *cfg,
             return 1;
         }
     }
-
-    step(progress_fn, ctx, 68, "Creating user account");
-    if (write_user_files(cfg, log_fn, ctx) != 0) {
-        return 1;
+    if (access(INSTALL_MNT "/boot/memtest86+.bin", F_OK) == 0) {
+        char *const cp_memtest_bios[] = {
+            "cp", INSTALL_MNT "/boot/memtest86+.bin", ROOT_MNT "/boot/memtest86+.bin", NULL
+        };
+        if (run_checked(cp_memtest_bios, log_fn, ctx) != 0) {
+            return 1;
+        }
+        emit_log(log_fn, ctx, "Installed Memtest86+ BIOS image");
+    }
+    if (access(INSTALL_MNT "/boot/memtest86+x64.efi", F_OK) == 0) {
+        char *const cp_memtest_uefi[] = {
+            "cp", INSTALL_MNT "/boot/memtest86+x64.efi", ROOT_MNT "/boot/memtest86+x64.efi", NULL
+        };
+        if (run_checked(cp_memtest_uefi, log_fn, ctx) != 0) {
+            return 1;
+        }
+        emit_log(log_fn, ctx, "Installed Memtest86+ UEFI image");
     }
 
     step(progress_fn, ctx, 72, "Installing target GRUB package");
@@ -801,6 +924,11 @@ int installer_run_install(const InstallerConfig *cfg,
     }
     if (installer_build_syspckg_state_cleanup_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
         shell_checked(cmd, log_fn, ctx) != 0) {
+        return 1;
+    }
+
+    step(progress_fn, ctx, 74, "Creating user accounts");
+    if (write_user_files(cfg, log_fn, ctx) != 0) {
         return 1;
     }
 
