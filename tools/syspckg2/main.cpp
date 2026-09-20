@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -997,6 +998,68 @@ void apply_repo_selection(libdnf5::Base & base, SourceMode source) {
     }
 }
 
+void ensure_fedora_glibc_bootstrap_layout() {
+    const std::filesystem::path gconv_dir{"/usr/lib64/gconv"};
+    const std::filesystem::path gconv_cache = gconv_dir / "gconv-modules.cache";
+    const std::filesystem::path ldconf_dir{"/etc/ld.so.conf.d"};
+    const std::filesystem::path ldconf{"/etc/ld.so.conf"};
+    const std::filesystem::path ldconfig_cache_dir{"/var/cache/ldconfig"};
+
+    std::error_code ec;
+
+    std::filesystem::create_directories(gconv_dir, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to prepare Fedora gconv directory " + gconv_dir.string() + ": " + ec.message());
+    }
+
+    if (!std::filesystem::exists(gconv_cache)) {
+        std::ofstream cache_file(gconv_cache, std::ios::out | std::ios::trunc);
+        if (!cache_file) {
+            throw std::runtime_error(
+                "Unable to create Fedora glibc bootstrap cache: " + gconv_cache.string());
+        }
+        cache_file.close();
+        std::filesystem::permissions(
+            gconv_cache,
+            std::filesystem::perms::owner_read |
+                std::filesystem::perms::owner_write |
+                std::filesystem::perms::group_read |
+                std::filesystem::perms::others_read,
+            std::filesystem::perm_options::replace,
+            ec);
+        log_info("Prepared Fedora glibc gconv cache bootstrap: " + gconv_cache.string());
+    }
+
+    ec.clear();
+    std::filesystem::create_directories(ldconf_dir, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to prepare " + ldconf_dir.string() + ": " + ec.message());
+    }
+
+    if (!std::filesystem::exists(ldconf)) {
+        std::ofstream ldconf_file(ldconf, std::ios::out | std::ios::trunc);
+        if (!ldconf_file) {
+            throw std::runtime_error("Unable to create " + ldconf.string());
+        }
+        ldconf_file << "include ld.so.conf.d/*.conf\n";
+    }
+
+    ec.clear();
+    std::filesystem::create_directories(ldconfig_cache_dir, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to prepare " + ldconfig_cache_dir.string() + ": " + ec.message());
+    }
+
+    std::filesystem::permissions(
+        ldconfig_cache_dir,
+        std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace,
+        ec);
+}
+
 void ensure_rpm_database() {
     const std::filesystem::path rpmdb_dir{"/var/lib/rpm"};
     const std::filesystem::path rpmdb_sqlite = rpmdb_dir / "rpmdb.sqlite";
@@ -1073,6 +1136,7 @@ void check_runtime_layout() {
     }
 
     ensure_rpm_database();
+    ensure_fedora_glibc_bootstrap_layout();
 }
 
 void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool load_repositories = true) {
