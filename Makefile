@@ -682,10 +682,10 @@ iso:
 	    cp -a /usr/share/terminfo/x/xterm-256color "$$ROOTFS_DIR/usr/share/terminfo/x/" 2>/dev/null || true
 	  fi
 	fi
-	SYSPCKG_LINK_INFO="$(file -b "$ROOTFS_DIR/usr/bin/syspckg" 2>/dev/null || true)"
-	case "$SYSPCKG_LINK_INFO" in
+	SYSPCKG_LINK_INFO="$$(file -b "$$ROOTFS_DIR/usr/bin/syspckg" 2>/dev/null || true)"
+	case "$$SYSPCKG_LINK_INFO" in
 	  *"statically linked"*) say "Legacy SystemPackager is static -> no global libc runtime needed" ;;
-	  *) die "Legacy syspckg must be statically linked before Fedora RPM bootstrap: $SYSPCKG_LINK_INFO" ;;
+	  *) die "Legacy syspckg must be statically linked before Fedora RPM bootstrap: $$SYSPCKG_LINK_INFO" ;;
 	esac
 	if [ -f "$$FILESFORLINUX_ROOTFS_DIR/etc/syspckg/syspckg-source" ]; then
 	  say "Copying syspckg source config into rootfs"
