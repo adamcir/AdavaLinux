@@ -11,7 +11,9 @@ ARCHIVES="$CACHE/archives"
 STATE="$APTROOT/state"
 SOURCES="$APTROOT/sources.list"
 STATUS="$STATE/status"
-KEYRING="/usr/share/keyrings/debian-archive-keyring.gpg"
+SYSTEM_DEBIAN_KEYRING="/usr/share/keyrings/debian-archive-keyring.gpg"
+KEYRING="$SYSTEM_DEBIAN_KEYRING"
+KEYRING_TMP=""
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -22,6 +24,59 @@ need() {
 
 need apt-get
 need dpkg-deb
+
+cleanup() {
+    if [ -n "$KEYRING_TMP" ] && [ -d "$KEYRING_TMP" ]; then
+        rm -rf "$KEYRING_TMP"
+    fi
+}
+trap cleanup EXIT INT TERM
+
+ensure_debian_archive_keyring() {
+    if [ -f "$SYSTEM_DEBIAN_KEYRING" ]; then
+        KEYRING="$SYSTEM_DEBIAN_KEYRING"
+        return 0
+    fi
+
+    echo "==> Debian archive keyring missing on host; bootstrapping it with host APT"
+
+    KEYRING_TMP="$(mktemp -d "${TMPDIR:-/tmp}/syspckg2-debian-keyring.XXXXXX")"
+
+    (
+        cd "$KEYRING_TMP"
+        apt-get download debian-archive-keyring
+    ) || {
+        echo "ERR: Unable to download package 'debian-archive-keyring' from host APT sources." >&2
+        echo "On Ubuntu install/enable it with:" >&2
+        echo "  sudo apt update" >&2
+        echo "  sudo apt install debian-archive-keyring" >&2
+        echo "If APT cannot find it, enable the Ubuntu universe repository first." >&2
+        exit 1
+    }
+
+    deb=""
+    for candidate in "$KEYRING_TMP"/debian-archive-keyring_*.deb; do
+        [ -f "$candidate" ] || continue
+        deb="$candidate"
+        break
+    done
+
+    if [ -z "$deb" ]; then
+        echo "ERR: Host APT reported success but no debian-archive-keyring .deb was downloaded." >&2
+        exit 1
+    fi
+
+    mkdir -p "$KEYRING_TMP/extracted"
+    dpkg-deb -x "$deb" "$KEYRING_TMP/extracted"
+
+    KEYRING="$KEYRING_TMP/extracted/usr/share/keyrings/debian-archive-keyring.gpg"
+    if [ ! -f "$KEYRING" ]; then
+        echo "ERR: Downloaded debian-archive-keyring package does not contain the Debian archive keyring." >&2
+        exit 1
+    fi
+
+    echo "==> Using temporary Debian archive keyring: $KEYRING"
+}
 
 runtime_lib_present() {
     pattern="$1"
@@ -54,11 +109,7 @@ if sysroot_complete; then
     exit 0
 fi
 
-if [ ! -f "$KEYRING" ]; then
-    echo "ERR: Missing Debian archive keyring: $KEYRING" >&2
-    echo "Install package 'debian-archive-keyring' on the build host." >&2
-    exit 1
-fi
+ensure_debian_archive_keyring
 
 echo "==> Preparing isolated Debian forky/$ARCH libdnf5 sysroot"
 rm -rf "$OUT"
