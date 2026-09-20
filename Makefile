@@ -335,6 +335,28 @@ copy_syspckg2_runtime_from_sysroot() {
     cp -a "$$SYSPCKG2_SYSROOT/usr/share/ca-certificates/." "$$ROOTFS_DIR/usr/share/ca-certificates/"
   fi
 
+  [ -x "$$SYSPCKG2_SYSROOT/usr/bin/gpg" ] || die "libdnf5 sysroot is missing /usr/bin/gpg"
+  [ -x "$$SYSPCKG2_SYSROOT/usr/bin/gpgconf" ] || die "libdnf5 sysroot is missing /usr/bin/gpgconf"
+  mkdir -p "$$ROOTFS_DIR/usr/libexec/syspckg2" "$$ROOTFS_DIR/usr/bin"
+  cp -aL "$$SYSPCKG2_SYSROOT/usr/bin/gpg" "$$ROOTFS_DIR/usr/libexec/syspckg2/gpg.real"
+  cp -aL "$$SYSPCKG2_SYSROOT/usr/bin/gpgconf" "$$ROOTFS_DIR/usr/libexec/syspckg2/gpgconf.real"
+  if [ -d "$$SYSPCKG2_SYSROOT/usr/share/gnupg" ]; then
+    mkdir -p "$$ROOTFS_DIR/usr/share/gnupg"
+    cp -a "$$SYSPCKG2_SYSROOT/usr/share/gnupg/." "$$ROOTFS_DIR/usr/share/gnupg/"
+  fi
+
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/gpg.real "$$@"' \
+    > "$$ROOTFS_DIR/usr/bin/gpg"
+  chmod +x "$$ROOTFS_DIR/usr/bin/gpg"
+
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/gpgconf.real "$$@"' \
+    > "$$ROOTFS_DIR/usr/bin/gpgconf"
+  chmod +x "$$ROOTFS_DIR/usr/bin/gpgconf"
+
   mkdir -p \
     "$$ROOTFS_DIR/var/cache/libdnf5" \
     "$$ROOTFS_DIR/var/lib/dnf" \
@@ -621,6 +643,7 @@ iso:
 	cp -a "$$SYSPCKG2_BIN" "$$ROOTFS_DIR/usr/libexec/syspckg2/syspckg2.real"
 	printf '%s\n' \
 	  '#!/bin/sh' \
+	  'export PATH=/usr/bin:/bin' \
 	  'exec /usr/lib/syspckg2/ld-linux-x86-64.so.2 --library-path /usr/lib/syspckg2 /usr/libexec/syspckg2/syspckg2.real "$$@"' \
 	  > "$$ROOTFS_DIR/usr/bin/syspckg2"
 	chmod +x "$$ROOTFS_DIR/usr/bin/syspckg2"
