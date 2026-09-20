@@ -616,6 +616,18 @@ void check_runtime_layout() {
     if (!std::filesystem::exists("/usr/lib/rpm/macros")) {
         throw std::runtime_error("RPM macros are missing: /usr/lib/rpm/macros");
     }
+    if (access("/usr/bin/gpg", X_OK) != 0) {
+        throw std::runtime_error("OpenPGP engine is missing: /usr/bin/gpg");
+    }
+    if (access("/usr/bin/gpgconf", X_OK) != 0) {
+        throw std::runtime_error("OpenPGP configuration engine is missing: /usr/bin/gpgconf");
+    }
+
+    const int gpg_status = std::system("/usr/bin/gpg --version >/dev/null 2>&1");
+    if (gpg_status != 0) {
+        throw std::runtime_error(
+            "OpenPGP engine exists but cannot start; rebuild the ISO with the private GnuPG runtime");
+    }
 }
 
 void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool load_repositories = true) {
