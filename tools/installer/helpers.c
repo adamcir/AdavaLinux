@@ -288,16 +288,18 @@ void installer_format_progress_bar(int percent, int width, char *out, size_t out
     }
 }
 
-void installer_build_syspckg_install_argv(char *argv[5], const char *selector)
+void installer_build_syspckg_install_argv(char *argv[7], const char *selector)
 {
     argv[0] = "syspckg";
     argv[1] = "install";
     argv[2] = (char *)selector;
-    argv[3] = "-y";
-    argv[4] = NULL;
+    argv[3] = "--source";
+    argv[4] = "fedora";
+    argv[5] = "-y";
+    argv[6] = NULL;
 }
 
-void installer_build_syspckg_root_install_argv(char *argv[7],
+void installer_build_syspckg_root_install_argv(char *argv[9],
                                                const char *selector,
                                                const char *root)
 {
@@ -306,8 +308,10 @@ void installer_build_syspckg_root_install_argv(char *argv[7],
     argv[2] = "/usr/bin/syspckg";
     argv[3] = "install";
     argv[4] = (char *)selector;
-    argv[5] = "-y";
-    argv[6] = NULL;
+    argv[5] = "--source";
+    argv[6] = "fedora";
+    argv[7] = "-y";
+    argv[8] = NULL;
 }
 
 int installer_build_grub_mkconfig_command(const char *root, char *out, size_t out_size)
@@ -317,7 +321,7 @@ int installer_build_grub_mkconfig_command(const char *root, char *out, size_t ou
     if (root == NULL || root[0] == '\0' || out == NULL || out_size == 0) {
         return -1;
     }
-    written = snprintf(out, out_size, "chroot %s /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg", root);
+    written = snprintf(out, out_size, "chroot %s /usr/bin/grub2-mkconfig -o /boot/grub/grub.cfg", root);
     return written >= 0 && (size_t)written < out_size ? 0 : -1;
 }
 
@@ -350,8 +354,8 @@ int installer_build_copy_grub_mkconfig_command(const char *root, char *out, size
         return -1;
     }
     written = snprintf(out, out_size,
-                       "mkdir -p %s/usr/sbin && cp -f /usr/sbin/grub-mkconfig %s/usr/sbin/grub-mkconfig && chmod 755 %s/usr/sbin/grub-mkconfig",
-                       root, root, root);
+                       "test -x %s/usr/bin/grub2-mkconfig",
+                       root);
     return written >= 0 && (size_t)written < out_size ? 0 : -1;
 }
 
