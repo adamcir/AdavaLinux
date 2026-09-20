@@ -316,10 +316,6 @@ static int sync_target_resolver(InstallerLogFn log_fn, void *ctx)
             "nameserver 8.8.8.8\n"
             "options timeout:2 attempts:2 rotate\n";
 
-        if (sizeof(fallback) > sizeof(buffer)) {
-            emit_log(log_fn, ctx, "Internal resolver fallback is too large");
-            return -1;
-        }
         memcpy(buffer, fallback, sizeof(fallback));
         used = sizeof(fallback) - 1;
         emit_log(log_fn, ctx, "Live resolver unavailable; using installer DNS fallback");
