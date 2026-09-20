@@ -1393,6 +1393,144 @@ bool confirm_transaction(bool assume_yes) {
     return answer.empty() || answer == "y" || answer == "Y" || answer == "yes" || answer == "YES";
 }
 
+bool fedora_bootstrap_marker_missing() {
+    return !std::filesystem::exists("/var/lib/syspckg2/fedora-base.ready");
+}
+
+void merge_bootstrap_tree(
+    const std::filesystem::path & source,
+    const std::filesystem::path & destination) {
+    std::error_code ec;
+
+    if (!std::filesystem::exists(source) && !std::filesystem::is_symlink(source)) {
+        return;
+    }
+
+    if (std::filesystem::is_directory(source) && !std::filesystem::is_symlink(source)) {
+        std::filesystem::create_directories(destination, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to create usr-merge directory " + destination.string() +
+                ": " + ec.message());
+        }
+
+        for (const auto & entry : std::filesystem::directory_iterator(source)) {
+            merge_bootstrap_tree(entry.path(), destination / entry.path().filename());
+        }
+
+        std::filesystem::remove(source, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to remove old usr-merge directory " + source.string() +
+                ": " + ec.message());
+        }
+        return;
+    }
+
+    if (std::filesystem::exists(destination) || std::filesystem::is_symlink(destination)) {
+        std::filesystem::remove_all(source, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to remove duplicate bootstrap path " + source.string() +
+                ": " + ec.message());
+        }
+        return;
+    }
+
+    std::filesystem::create_directories(destination.parent_path(), ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to prepare usr-merge destination " + destination.parent_path().string() +
+            ": " + ec.message());
+    }
+
+    std::filesystem::rename(source, destination, ec);
+    if (!ec) {
+        return;
+    }
+
+    ec.clear();
+    if (std::filesystem::is_symlink(source)) {
+        const auto target = std::filesystem::read_symlink(source, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to read bootstrap symlink " + source.string() +
+                ": " + ec.message());
+        }
+        std::filesystem::create_symlink(target, destination, ec);
+    } else {
+        std::filesystem::copy_file(
+            source,
+            destination,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+    }
+
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to migrate " + source.string() + " to " + destination.string() +
+            ": " + ec.message());
+    }
+
+    std::filesystem::remove(source, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to remove migrated path " + source.string() +
+            ": " + ec.message());
+    }
+}
+
+void ensure_usr_merge_link(
+    const std::filesystem::path & legacy_path,
+    const std::filesystem::path & usr_path,
+    const std::filesystem::path & link_target) {
+    std::error_code ec;
+
+    if (std::filesystem::is_symlink(legacy_path)) {
+        const auto current = std::filesystem::read_symlink(legacy_path, ec);
+        if (!ec && current == link_target) {
+            return;
+        }
+        ec.clear();
+        std::filesystem::remove(legacy_path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to replace usr-merge symlink " + legacy_path.string() +
+                ": " + ec.message());
+        }
+    } else if (std::filesystem::exists(legacy_path)) {
+        merge_bootstrap_tree(legacy_path, usr_path);
+    }
+
+    std::filesystem::create_directories(usr_path, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to create usr-merge target " + usr_path.string() +
+            ": " + ec.message());
+    }
+
+    std::filesystem::create_symlink(link_target, legacy_path, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to create usr-merge link " + legacy_path.string() +
+            " -> " + link_target.string() + ": " + ec.message());
+    }
+
+    log_ok(
+        "usr-merge: " + legacy_path.string() + " -> " + link_target.string());
+}
+
+void prepare_fedora_usr_merge() {
+    log_info("Preparing Fedora-compatible usr-merge layout...");
+
+    ensure_usr_merge_link("/bin", "/usr/bin", "usr/bin");
+    ensure_usr_merge_link("/sbin", "/usr/sbin", "usr/sbin");
+    ensure_usr_merge_link("/lib", "/usr/lib", "usr/lib");
+    ensure_usr_merge_link("/lib64", "/usr/lib64", "usr/lib64");
+
+    log_ok("Fedora-compatible usr-merge layout ready");
+}
+
 bool transaction_contains_fedora_packages(libdnf5::base::Transaction & transaction) {
     for (const auto & item : transaction.get_transaction_packages()) {
         if (!libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
@@ -1407,8 +1545,7 @@ bool transaction_contains_fedora_packages(libdnf5::base::Transaction & transacti
 }
 
 bool fedora_bootstrap_needed(libdnf5::base::Transaction & transaction) {
-    static const std::filesystem::path marker{"/var/lib/syspckg2/fedora-base.ready"};
-    return !std::filesystem::exists(marker) && transaction_contains_fedora_packages(transaction);
+    return fedora_bootstrap_marker_missing() && transaction_contains_fedora_packages(transaction);
 }
 
 void set_bootstrap_tsflags(libdnf5::Base & base) {
@@ -1692,6 +1829,25 @@ int run_goal(
     bool assume_yes,
     const std::string & description,
     bool allow_fedora_bootstrap = false) {
+    const auto original_tsflags = base.get_config().get_tsflags_option().get_value();
+    bool bootstrap_mode =
+        allow_fedora_bootstrap && fedora_bootstrap_marker_missing();
+
+    // Transaction flags are copied while resolving the goal. Bootstrap flags
+    // therefore must be active BEFORE goal.resolve(), not after it.
+    if (bootstrap_mode) {
+        log_warn(
+            "First Fedora RPM transaction detected; preparing bootstrap transaction "
+            "before dependency resolution");
+        set_bootstrap_tsflags(base);
+    }
+
+    const auto restore_pre_resolve_flags = [&]() {
+        if (bootstrap_mode) {
+            restore_tsflags(base, original_tsflags);
+        }
+    };
+
     const auto resolve_started = std::chrono::steady_clock::now();
     ActivitySpinner resolve_spinner("Resolving dependencies");
     auto transaction = goal.resolve();
@@ -1700,22 +1856,32 @@ int run_goal(
         "Dependencies resolved in " +
         elapsed_string(std::chrono::steady_clock::now() - resolve_started));
 
+    // If auto mode resolved entirely from Adava repositories, do not use the
+    // Fedora bootstrap path.
+    if (bootstrap_mode && !transaction_contains_fedora_packages(transaction)) {
+        restore_tsflags(base, original_tsflags);
+        bootstrap_mode = false;
+    }
+
     for (const auto & line : transaction.get_resolve_logs_as_strings()) {
         log_warn(line);
     }
 
     if (fatal_resolve_problem(transaction.get_problems())) {
+        restore_pre_resolve_flags();
         log_err("Dependency resolution failed.");
         return 2;
     }
 
     if (transaction.empty()) {
+        restore_pre_resolve_flags();
         log_ok("Nothing to do");
         return 0;
     }
 
     print_transaction(transaction);
     if (!confirm_transaction(assume_yes)) {
+        restore_pre_resolve_flags();
         log_warn("Cancelled");
         return 0;
     }
@@ -1723,15 +1889,12 @@ int run_goal(
     transaction.set_description(description);
     transaction.set_callbacks(std::make_unique<SyspckgTransactionCallbacks>());
 
-    const bool bootstrap_mode = allow_fedora_bootstrap && fedora_bootstrap_needed(transaction);
-    const auto original_tsflags = base.get_config().get_tsflags_option().get_value();
-
     if (bootstrap_mode) {
         log_warn(
-            "First Fedora RPM transaction detected; using AdavaLinux bootstrap mode "
-            "(scriptlets/triggers disabled for the initial base only)");
+            "AdavaLinux Fedora bootstrap mode active: RPM scriptlets and triggers "
+            "are disabled for this first base transaction");
         backup_adavalinux_core_files();
-        set_bootstrap_tsflags(base);
+        prepare_fedora_usr_merge();
     }
 
     try {
