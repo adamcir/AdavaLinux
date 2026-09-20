@@ -229,7 +229,7 @@ static void test_grub_mkconfig_command_targets_mounted_root(void)
     char out[512];
 
     assert(installer_build_grub_mkconfig_command("/mnt/root", out, sizeof(out)) == 0);
-    assert(strcmp(out, "chroot /mnt/root /usr/bin/grub2-mkconfig -o /boot/grub/grub.cfg") == 0);
+    assert(strcmp(out, "chroot /mnt/root /usr/bin/grub2-mkconfig -o /boot/grub2/grub.cfg") == 0);
 }
 
 static void test_default_grub_config_keeps_kms_enabled(void)
