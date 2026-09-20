@@ -43,6 +43,8 @@ sysroot_complete() {
     runtime_lib_present 'librpm_sequoia.so.*' || return 1
     runtime_lib_present 'libcurl*.so.*' || return 1
     runtime_lib_present 'libgpgme.so.*' || return 1
+    [ -x "$OUT/usr/bin/gpg" ] || return 1
+    [ -x "$OUT/usr/bin/gpgconf" ] || return 1
     [ -f "$OUT/usr/lib/rpm/rpmrc" ] || return 1
     [ -f "$OUT/usr/lib/rpm/macros" ] || return 1
     [ -f "$OUT/etc/ssl/certs/ca-certificates.crt" ] || return 1
@@ -76,7 +78,7 @@ apt_common update
 
 echo "==> Downloading libdnf5 development/runtime dependency closure"
 apt_common --download-only -y --no-install-recommends install \
-    libdnf5-dev libdnf5-2 rpm rpm-common ca-certificates
+    libdnf5-dev libdnf5-2 rpm rpm-common ca-certificates gpg gpgconf
 
 count=0
 for deb in "$ARCHIVES"/*.deb; do
