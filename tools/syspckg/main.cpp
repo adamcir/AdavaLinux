@@ -1245,12 +1245,16 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
     auto & config = base.get_config();
     config.get_plugins_option().set(false);
     config.get_installroot_option().set("/");
+    config.get_sslcacert_option().set(
+        libdnf5::Option::Priority::RUNTIME,
+        "/usr/lib/syspckg/ca-certificates.crt");
     config.get_timeout_option().set(libdnf5::Option::Priority::RUNTIME, NETWORK_TIMEOUT_SECONDS);
     config.get_max_parallel_downloads_option().set(
         libdnf5::Option::Priority::RUNTIME, MAX_PARALLEL_DOWNLOADS);
     config.get_max_downloads_per_mirror_option().set(
         libdnf5::Option::Priority::RUNTIME, MAX_DOWNLOADS_PER_MIRROR);
 
+    log_info("TLS verification CA: /usr/lib/syspckg/ca-certificates.crt");
     log_info(
         "Network policy: timeout " + std::to_string(NETWORK_TIMEOUT_SECONDS) +
         "s, max " + std::to_string(MAX_MIRROR_TRIES) +
