@@ -1900,6 +1900,8 @@ int run_goal(
         prepare_fedora_usr_merge();
     }
 
+    bool rpm_overrides_active = false;
+
     try {
         log_info("Downloading packages...");
 
@@ -1984,7 +1986,6 @@ int run_goal(
         log_info("Preparing RPM transaction...");
         const auto transaction_started = std::chrono::steady_clock::now();
 
-        bool rpm_overrides_active = false;
         if (bootstrap_mode) {
             enable_bootstrap_rpm_overrides();
             rpm_overrides_active = true;
@@ -2021,8 +2022,11 @@ int run_goal(
             finalize_fedora_bootstrap();
         }
     } catch (const std::exception & ex) {
-        if (bootstrap_mode) {
+        if (rpm_overrides_active) {
             disable_bootstrap_rpm_overrides();
+            rpm_overrides_active = false;
+        }
+        if (bootstrap_mode) {
             try {
                 restore_tsflags(base, original_tsflags);
             } catch (...) {
