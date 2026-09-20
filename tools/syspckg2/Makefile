@@ -1,8 +1,8 @@
 CXX ?= c++
-CXXFLAGS ?= -std=c++20 -Wall -Wextra -Werror -O2
+CXXFLAGS ?= -std=c++20 -Wall -Wextra -Werror -O2 -pthread
 CPPFLAGS ?=
 LDFLAGS ?=
-LDLIBS ?=
+LDLIBS ?= -pthread
 
 TARGET := syspckg2
 SYSROOT ?=
