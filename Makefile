@@ -126,20 +126,20 @@ MEMTEST_BIOS_IMAGE="$(MEMTEST_BIOS_IMAGE)"
 MEMTEST_UEFI_IMAGE="$(MEMTEST_UEFI_IMAGE)"
 say() { printf "\n==> %s\n" "$$*"; }
 die() { printf "\nERROR: %s\n" "$$*" >&2; exit 1; }
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
+need_cmd() { command -v "$$1" >/dev/null 2>&1 || die "Missing command: $$1"; }
 gzip_compress_stream() {
   if command -v pigz >/dev/null 2>&1; then
-    pigz -9 -p "$JOBS"
+    pigz -9 -p "$$JOBS"
   else
     gzip -9
   fi
 }
 gzip_decompress_file() {
-  file="$1"
+  file="$$1"
   if command -v pigz >/dev/null 2>&1; then
-    pigz -dc "$file"
+    pigz -dc "$$file"
   else
-    gzip -dc "$file"
+    gzip -dc "$$file"
   fi
 }
 require_source_dirs() {
@@ -701,21 +701,21 @@ iso:
 	  say "syspckg-source not found in filesforlinux/rootfs/etc -> using syspckg built-in default URL"
 	fi
 	if command -v pigz >/dev/null 2>&1; then
-	  say "Packing $OUT_INSTALLER_INITRAMFS_NAME with pigz ($JOBS threads)"
+	  say "Packing $$OUT_INSTALLER_INITRAMFS_NAME with pigz ($$JOBS threads)"
 	else
-	  say "Packing $OUT_INSTALLER_INITRAMFS_NAME with gzip (pigz not installed)"
+	  say "Packing $$OUT_INSTALLER_INITRAMFS_NAME with gzip (pigz not installed)"
 	fi
-	( cd "$ROOTFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip_compress_stream > "$OUT_DIR/$OUT_INSTALLER_INITRAMFS_NAME" )
+	( cd "$$ROOTFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip_compress_stream > "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" )
 	if command -v pigz >/dev/null 2>&1; then
-	  say "Packing $OUT_DISK_INITRAMFS_NAME with pigz ($JOBS threads)"
+	  say "Packing $$OUT_DISK_INITRAMFS_NAME with pigz ($$JOBS threads)"
 	else
-	  say "Packing $OUT_DISK_INITRAMFS_NAME with gzip (pigz not installed)"
+	  say "Packing $$OUT_DISK_INITRAMFS_NAME with gzip (pigz not installed)"
 	fi
-	( cd "$DISK_INITRAMFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip_compress_stream > "$OUT_DIR/$OUT_DISK_INITRAMFS_NAME" )
+	( cd "$$DISK_INITRAMFS_DIR" && find . -print0 | cpio --owner=0:0 --null -o --format=newc | gzip_compress_stream > "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" )
 	say "Sanity check: installer initramfs contains init + bin/sh"
-	gzip_decompress_file "$OUT_DIR/$OUT_INSTALLER_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null || die "Installer initramfs does not contain init or bin/sh"
+	gzip_decompress_file "$$OUT_DIR/$$OUT_INSTALLER_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null || die "Installer initramfs does not contain init or bin/sh"
 	say "Sanity check: disk initramfs contains init + bin/sh"
-	gzip_decompress_file "$OUT_DIR/$OUT_DISK_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null || die "Disk initramfs does not contain init or bin/sh"
+	gzip_decompress_file "$$OUT_DIR/$$OUT_DISK_INITRAMFS_NAME" | cpio -it | grep -E '^init$|^bin/sh$' >/dev/null || die "Disk initramfs does not contain init or bin/sh"
 	say "Packaging ISO tree from existing artifacts"
 	mkdir -p "$$ISO_DIR/boot/grub"
 	cp -f "$$OUT_DIR/$$OUT_KERNEL_NAME" "$$ISO_DIR/boot/$$OUT_KERNEL_NAME"
