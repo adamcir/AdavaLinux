@@ -163,10 +163,14 @@ std::string make_percent_bar(int percent, int width = 28) {
 
 class MetadataActivity {
 public:
-    explicit MetadataActivity(std::size_t total_repositories) : total_(total_repositories) {
+    explicit MetadataActivity(const std::vector<std::string> & repositories)
+        : repositories_(repositories), total_(repositories.size()) {
+        for (const auto & repo_id : repositories_) {
+            repo_progress_.emplace(repo_id, RepoProgress{});
+        }
+
         if (!interactive_terminal()) {
-            log_info(
-                "Repository metadata: 0/" + std::to_string(total_) + " (0%)");
+            log_info("Repository metadata: 0/" + std::to_string(total_) + " (0%)");
             return;
         }
 
@@ -176,17 +180,53 @@ public:
             std::size_t frame = 0;
 
             while (running_.load()) {
-                const auto done = completed_.load();
-                const int percent = total_ == 0
-                    ? 100
-                    : static_cast<int>((done * 100U) / total_);
+                std::vector<std::string> details;
+                double aggregate_total = 0.0;
+                double aggregate_downloaded = 0.0;
+                bool have_byte_progress = false;
 
-                std::string phase;
-                if (done >= total_ && total_ > 0) {
-                    phase = "Processing metadata / building solver cache";
-                } else {
-                    phase = "Repository metadata";
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex_);
+                    for (const auto & repo_id : repositories_) {
+                        const auto it = repo_progress_.find(repo_id);
+                        if (it == repo_progress_.end()) {
+                            continue;
+                        }
+
+                        const auto & state = it->second;
+                        if (state.total > 0.0) {
+                            have_byte_progress = true;
+                            aggregate_total += state.total;
+                            aggregate_downloaded += std::min(state.downloaded, state.total);
+
+                            const int repo_percent = std::clamp(
+                                static_cast<int>((state.downloaded * 100.0) / state.total), 0, 100);
+                            details.push_back(repo_id + " " + std::to_string(repo_percent) + "%");
+                        } else if (state.failed) {
+                            details.push_back(repo_id + " FAILED");
+                        } else if (state.finished) {
+                            details.push_back(repo_id + " 100%");
+                        } else {
+                            details.push_back(repo_id + " waiting");
+                        }
+                    }
                 }
+
+                const auto done = completed_.load();
+                int percent = 0;
+                if (have_byte_progress && aggregate_total > 0.0) {
+                    percent = std::clamp(
+                        static_cast<int>((aggregate_downloaded * 100.0) / aggregate_total), 0, 100);
+                } else if (total_ > 0) {
+                    percent = static_cast<int>((done * 100U) / total_);
+                } else {
+                    percent = 100;
+                }
+
+                std::string phase =
+                    (done >= total_ && total_ > 0)
+                        ? "Processing metadata / building solver cache"
+                        : "Repository metadata";
 
                 std::ostringstream out;
                 out << COLOR_CYAN << frames[frame++ % 4] << COLOR_RESET << " "
@@ -194,6 +234,17 @@ public:
                     << COLOR_GREEN << "[" << make_percent_bar(percent) << "]" << COLOR_RESET << " "
                     << std::setw(3) << percent << "%  "
                     << done << "/" << total_;
+
+                if (!details.empty()) {
+                    out << "  {";
+                    for (std::size_t i = 0; i < details.size(); ++i) {
+                        if (i != 0) {
+                            out << ", ";
+                        }
+                        out << details[i];
+                    }
+                    out << "}";
+                }
 
                 render_status_line(out.str());
                 std::this_thread::sleep_for(std::chrono::milliseconds(180));
@@ -208,26 +259,41 @@ public:
         stop();
     }
 
-    void repository_finished(const std::string & repo_id) {
-        bool inserted = false;
+    void update_repo_progress(const std::string & repo_id, double total, double downloaded) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto & state = repo_progress_[repo_id];
+        if (total > 0.0) {
+            state.total = total;
+        }
+        if (downloaded >= 0.0) {
+            state.downloaded = downloaded;
+        }
+    }
+
+    void repository_finished(const std::string & repo_id, bool success) {
+        bool count_it = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            inserted = finished_repositories_.insert(repo_id).second;
+            auto & state = repo_progress_[repo_id];
+            if (!state.finished) {
+                state.finished = true;
+                state.failed = !success;
+                if (success && state.total > 0.0) {
+                    state.downloaded = state.total;
+                }
+                count_it = true;
+            }
         }
-        if (!inserted) {
+
+        if (!count_it) {
             return;
         }
 
         const auto done = ++completed_;
-        const int percent = total_ == 0
-            ? 100
-            : static_cast<int>((done * 100U) / total_);
-
         if (!interactive_terminal()) {
             log_info(
-                "Repository metadata [" + make_percent_bar(percent) + "] " +
-                std::to_string(percent) + "%  " +
-                std::to_string(done) + "/" + std::to_string(total_));
+                "Repository metadata: " + std::to_string(done) + "/" +
+                std::to_string(total_) + " repositories complete");
         }
     }
 
@@ -244,11 +310,19 @@ public:
     }
 
 private:
+    struct RepoProgress {
+        double total{0.0};
+        double downloaded{0.0};
+        bool finished{false};
+        bool failed{false};
+    };
+
+    std::vector<std::string> repositories_;
     const std::size_t total_;
     std::atomic<std::size_t> completed_{0};
     std::atomic<bool> running_{false};
     std::mutex state_mutex_;
-    std::set<std::string> finished_repositories_;
+    std::unordered_map<std::string, RepoProgress> repo_progress_;
     std::thread worker_;
 };
 
@@ -269,8 +343,36 @@ std::string format_bytes(double bytes) {
     return out.str();
 }
 
-struct RepoFetchContext {
+enum class DownloadContextKind {
+    REPOSITORY,
+    PACKAGE,
+};
+
+struct DownloadContext {
+    explicit DownloadContext(DownloadContextKind kind) : kind(kind) {}
+    DownloadContextKind kind;
+};
+
+struct RepoFetchContext : DownloadContext {
+    RepoFetchContext(std::string repo_id, std::vector<std::string> metadata_items)
+        : DownloadContext(DownloadContextKind::REPOSITORY),
+          repo_id(std::move(repo_id)),
+          metadata_items(std::move(metadata_items)) {}
+
     std::string repo_id;
+    std::vector<std::string> metadata_items;
+};
+
+struct PackageFetchContext : DownloadContext {
+    PackageFetchContext(std::string filename, std::size_t index, std::size_t total)
+        : DownloadContext(DownloadContextKind::PACKAGE),
+          filename(std::move(filename)),
+          index(index),
+          total(total) {}
+
+    std::string filename;
+    std::size_t index;
+    std::size_t total;
 };
 
 class VerboseDownloadCallbacks : public libdnf5::repo::DownloadCallbacks {
@@ -294,6 +396,10 @@ private:
         std::string description;
         std::string result_key;
         bool repository_metadata{false};
+        std::vector<std::string> metadata_items;
+        std::size_t archive_index{0};
+        std::size_t archive_total{0};
+        int attempt{1};
         double total{0.0};
         int last_bucket{-10};
         std::size_t spinner_frame{0};
@@ -309,13 +415,19 @@ private:
         const char spinner = frames[state.spinner_frame % 4];
 
         std::ostringstream out;
-        out << COLOR_CYAN << spinner << COLOR_RESET << " "
-            << state.description << " "
+        out << COLOR_CYAN << spinner << COLOR_RESET << " ";
+        if (state.archive_total > 0) {
+            out << "archive " << state.archive_index << "/" << state.archive_total << "  ";
+        }
+        out << state.description << " "
             << COLOR_GREEN << "[" << make_percent_bar(percent) << "]" << COLOR_RESET << " "
             << std::setw(3) << percent << "%";
 
         if (total_to_download > 0.0) {
             out << "  " << format_bytes(downloaded) << "/" << format_bytes(total_to_download);
+        }
+        if (state.archive_total > 0) {
+            out << "  attempt " << state.attempt << "/" << MAX_MIRROR_TRIES;
         }
 
         return out.str();
@@ -325,25 +437,55 @@ private:
         [[maybe_unused]] void * user_data,
         const char * description,
         double total_to_download) override {
-        const auto * repo_context = static_cast<const RepoFetchContext *>(user_data);
-        const std::string label = description ? description : "(unknown download)";
+        const auto * context = static_cast<const DownloadContext *>(user_data);
+        const auto * repo_context =
+            context && context->kind == DownloadContextKind::REPOSITORY
+                ? static_cast<const RepoFetchContext *>(context)
+                : nullptr;
+        const auto * package_context =
+            context && context->kind == DownloadContextKind::PACKAGE
+                ? static_cast<const PackageFetchContext *>(context)
+                : nullptr;
+
+        std::string label = description ? description : "(unknown download)";
+        if (package_context && !package_context->filename.empty()) {
+            label = package_context->filename;
+        }
 
         downloads_.push_back(DownloadState{
             label,
             repo_context ? repo_context->repo_id : label,
             repo_context != nullptr,
+            repo_context ? repo_context->metadata_items : std::vector<std::string>{},
+            package_context ? package_context->index : 0,
+            package_context ? package_context->total : 0,
+            1,
             total_to_download,
             -10,
             0,
         });
         auto & state = downloads_.back();
 
-        if (!state.repository_metadata) {
-            if (interactive_terminal()) {
-                render_status_line(progress_bar(state, 0.0, total_to_download));
-            } else {
-                log_info("Fetch start: " + state.description + " (" + format_bytes(total_to_download) + ")");
+        if (state.repository_metadata) {
+            for (std::size_t i = 0; i < state.metadata_items.size(); ++i) {
+                log_info(
+                    "[" + state.result_key + "] metadata " +
+                    std::to_string(i + 1) + "/" + std::to_string(state.metadata_items.size()) +
+                    " queued: " + state.metadata_items[i]);
             }
+        } else if (interactive_terminal()) {
+            render_status_line(progress_bar(state, 0.0, total_to_download));
+        } else {
+            std::string prefix;
+            if (state.archive_total > 0) {
+                prefix =
+                    "archive " + std::to_string(state.archive_index) + "/" +
+                    std::to_string(state.archive_total) + " ";
+            }
+            log_info(
+                "Fetch start: " + prefix + state.description +
+                " (" + format_bytes(total_to_download) + "), attempt " +
+                std::to_string(state.attempt) + "/" + std::to_string(MAX_MIRROR_TRIES));
         }
         return &state;
     }
@@ -360,6 +502,10 @@ private:
         ++state->spinner_frame;
 
         if (state->repository_metadata) {
+            if (metadata_activity_) {
+                metadata_activity_->update_repo_progress(
+                    state->result_key, total_to_download, downloaded);
+            }
             return OK;
         }
 
@@ -389,17 +535,33 @@ private:
         switch (status) {
             case TransferStatus::SUCCESSFUL:
                 ++result.successful;
-                if (state && state->repository_metadata && metadata_activity_) {
-                    metadata_activity_->repository_finished(result_key);
-                } else if (!(state && state->repository_metadata)) {
+                if (state && state->repository_metadata) {
+                    for (std::size_t i = 0; i < state->metadata_items.size(); ++i) {
+                        log_ok(
+                            "[" + result_key + "] metadata " +
+                            std::to_string(i + 1) + "/" + std::to_string(state->metadata_items.size()) +
+                            " downloaded: " + state->metadata_items[i]);
+                    }
+                    if (metadata_activity_) {
+                        metadata_activity_->repository_finished(result_key, true);
+                    }
+                } else {
                     log_ok("Fetch complete: " + description);
                 }
                 break;
             case TransferStatus::ALREADYEXISTS:
                 ++result.successful;
-                if (state && state->repository_metadata && metadata_activity_) {
-                    metadata_activity_->repository_finished(result_key);
-                } else if (!(state && state->repository_metadata)) {
+                if (state && state->repository_metadata) {
+                    for (std::size_t i = 0; i < state->metadata_items.size(); ++i) {
+                        log_info(
+                            "[" + result_key + "] metadata " +
+                            std::to_string(i + 1) + "/" + std::to_string(state->metadata_items.size()) +
+                            " cache hit: " + state->metadata_items[i]);
+                    }
+                    if (metadata_activity_) {
+                        metadata_activity_->repository_finished(result_key, true);
+                    }
+                } else {
                     log_info("Fetch cache hit: " + description);
                 }
                 break;
@@ -407,7 +569,7 @@ private:
                 ++result.failed;
                 result.last_error = msg ? msg : "unknown download error";
                 if (state && state->repository_metadata && metadata_activity_) {
-                    metadata_activity_->repository_finished(result_key);
+                    metadata_activity_->repository_finished(result_key, false);
                 }
                 log_warn("Fetch failed: " + description + " -> " + result.last_error);
 
@@ -431,7 +593,20 @@ private:
         const char * msg,
         const char * url,
         const char * metadata) override {
-        std::string detail = "Mirror failed";
+        auto * state = static_cast<DownloadState *>(user_cb_data);
+        const int failed_attempt = state ? state->attempt : 1;
+
+        std::string detail;
+        if (state && state->archive_total > 0) {
+            detail =
+                "Archive " + std::to_string(state->archive_index) + "/" +
+                std::to_string(state->archive_total) +
+                " attempt " + std::to_string(failed_attempt) + "/" +
+                std::to_string(MAX_MIRROR_TRIES) + " failed";
+        } else {
+            detail = "Mirror failed";
+        }
+
         if (url && *url) {
             detail += ": ";
             detail += url;
@@ -446,6 +621,19 @@ private:
             detail += msg;
         }
         log_warn(detail);
+
+        if (state && state->archive_total > 0 && state->attempt < MAX_MIRROR_TRIES) {
+            ++state->attempt;
+            if (interactive_terminal()) {
+                render_status_line(progress_bar(*state, 0.0, state->total));
+            } else {
+                log_info(
+                    "Retrying archive " + std::to_string(state->archive_index) + "/" +
+                    std::to_string(state->archive_total) + ": " + state->description +
+                    ", attempt " + std::to_string(state->attempt) + "/" +
+                    std::to_string(MAX_MIRROR_TRIES));
+            }
+        }
         return OK;
     }
 
@@ -672,7 +860,27 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
 
             const auto repo_id = repo->get_id();
             enabled_repo_ids.push_back(repo_id);
-            repo_fetch_contexts.push_back(RepoFetchContext{repo_id});
+
+            std::vector<std::string> metadata_items{"repomd.xml", "primary"};
+            const auto optional_metadata =
+                config.get_optional_metadata_types_option().get_value();
+            if (optional_metadata.contains("filelists")) {
+                metadata_items.emplace_back("filelists");
+            }
+            if (optional_metadata.contains("other")) {
+                metadata_items.emplace_back("other");
+            }
+            if (optional_metadata.contains("presto")) {
+                metadata_items.emplace_back("presto");
+            }
+            if (optional_metadata.contains("updateinfo")) {
+                metadata_items.emplace_back("updateinfo");
+            }
+            if (optional_metadata.contains("comps")) {
+                metadata_items.emplace_back("comps");
+            }
+
+            repo_fetch_contexts.emplace_back(repo_id, std::move(metadata_items));
             repo->set_user_data(&repo_fetch_contexts.back());
 
             auto & repo_config = repo->get_config();
@@ -703,7 +911,7 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         throw std::runtime_error("No enabled package repositories");
     }
 
-    MetadataActivity metadata_activity(enabled_repo_ids.size());
+    MetadataActivity metadata_activity(enabled_repo_ids);
     auto download_callbacks = std::make_unique<VerboseDownloadCallbacks>(&metadata_activity);
     auto * download_callbacks_ptr = download_callbacks.get();
     base.set_download_callbacks(std::move(download_callbacks));
@@ -744,6 +952,20 @@ void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool
         } else {
             ++usable_repositories;
             log_ok("Repository ready: " + repo_id);
+
+            for (const auto & context : repo_fetch_contexts) {
+                if (context.repo_id != repo_id) {
+                    continue;
+                }
+                for (std::size_t i = 0; i < context.metadata_items.size(); ++i) {
+                    log_ok(
+                        "[" + repo_id + "] metadata " +
+                        std::to_string(i + 1) + "/" +
+                        std::to_string(context.metadata_items.size()) +
+                        " processed: " + context.metadata_items[i]);
+                }
+                break;
+            }
         }
     }
 
@@ -852,6 +1074,24 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
         libdnf5::repo::PackageDownloader downloader(base);
         downloader.set_fail_fast(false);
 
+        std::size_t archive_total = 0;
+        for (auto & item : transaction.get_transaction_packages()) {
+            if (!libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
+                continue;
+            }
+
+            const auto & pkg = item.get_package();
+            if (!transaction.get_download_local_pkgs() &&
+                pkg.get_repo()->get_type() == libdnf5::repo::Repo::Type::COMMANDLINE) {
+                continue;
+            }
+            ++archive_total;
+        }
+
+        log_info("Archives to download: " + std::to_string(archive_total));
+
+        std::list<PackageFetchContext> package_contexts;
+        std::size_t archive_index = 0;
         for (auto & item : transaction.get_transaction_packages()) {
             if (!libdnf5::transaction::transaction_item_action_is_inbound(item.get_action())) {
                 continue;
@@ -863,7 +1103,14 @@ int run_goal(libdnf5::Base & base, libdnf5::Goal & goal, bool assume_yes, const 
                 continue;
             }
 
-            downloader.add(pkg);
+            ++archive_index;
+            std::string filename = std::filesystem::path(pkg.get_location()).filename().string();
+            if (filename.empty()) {
+                filename = pkg.get_full_nevra() + ".rpm";
+            }
+
+            package_contexts.emplace_back(filename, archive_index, archive_total);
+            downloader.add(pkg, &package_contexts.back());
         }
 
         downloader.download();
