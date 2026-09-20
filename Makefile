@@ -77,6 +77,8 @@ QEMU_IMG ?= qemu-img
 QEMU_UEFI_VIDEO ?= std
 QEMU_RAM ?= 2048M
 QEMU_CPUS ?= $(JOBS)
+QEMU_ACCEL ?= $(shell if [ "$(HOST_ARCH)" = "x86_64" ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then printf '%s' 'kvm'; else printf '%s' 'tcg,thread=multi'; fi)
+QEMU_CPU ?= $(shell if [ "$(QEMU_ACCEL)" = "kvm" ]; then printf '%s' 'host'; else printf '%s' 'max'; fi)
 
 .PHONY: all tools kernel busybox iso xfce run-bios run-uefi run-bios-install run-uefi-install run-bios-hdd run-uefi-hdd clean help
 
@@ -455,7 +457,7 @@ print_context() {
   say "Kernel:   $$KERNEL_DIR"
   say "BusyBox:  $$BUSYBOX_DIR"
   say "Jobs:     $$JOBS"
-  say "QEMU:     $(QEMU_CPUS) vCPU / $(QEMU_RAM) RAM"
+  say "QEMU:     $(QEMU_CPUS) vCPU / $(QEMU_RAM) RAM / $(QEMU_ACCEL) / CPU=$(QEMU_CPU)"
   say "Host:     $$HOST_ARCH ($$HOST_UNAME)"
   say "Target:   $$TARGET_ARCH"
   say "Cross:    $${CROSS_COMPILE:-<native>}"
@@ -755,7 +757,12 @@ run-bios:
 	set -eu
 	command -v "$(QEMU)" >/dev/null 2>&1 || { printf "\nERROR: Missing command: $(QEMU)\n" >&2; exit 1; }
 	[ -f "$(ISO_OUT_BIOS)" ] || { printf "\nERROR: Missing BIOS ISO: $(ISO_OUT_BIOS). Run make iso first.\n" >&2; exit 1; }
-	"$(QEMU)" -cdrom "$(ISO_OUT_BIOS)" -m "$(QEMU_RAM)" -smp "$(QEMU_CPUS)"
+	"$(QEMU)" \
+	  -accel "$(QEMU_ACCEL)" \
+	  -cpu "$(QEMU_CPU)" \
+	  -smp "$(QEMU_CPUS)" \
+	  -m "$(QEMU_RAM)" \
+	  -cdrom "$(ISO_OUT_BIOS)"
 
 run-bios-install:
 	set -eu
@@ -768,8 +775,10 @@ run-bios-install:
 	fi
 	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
-	  -m "$(QEMU_RAM)" \
+	  -accel "$(QEMU_ACCEL)" \
+	  -cpu "$(QEMU_CPU)" \
 	  -smp "$(QEMU_CPUS)" \
+	  -m "$(QEMU_RAM)" \
 	  -drive file="$(BIOS_HDD_IMG)",format=qcow2 \
 	  -cdrom "$(ISO_OUT_BIOS)" \
 	  -boot d
@@ -783,7 +792,12 @@ run-bios-hdd:
 	  "$(QEMU_IMG)" create -f qcow2 "$(BIOS_HDD_IMG)" "$(HDD_SIZE)"
 	fi
 	"$(QEMU_IMG)" resize "$(BIOS_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
-	"$(QEMU)" -m "$(QEMU_RAM)" -smp "$(QEMU_CPUS)" -drive file="$(BIOS_HDD_IMG)",format=qcow2
+	"$(QEMU)" \
+	  -accel "$(QEMU_ACCEL)" \
+	  -cpu "$(QEMU_CPU)" \
+	  -smp "$(QEMU_CPUS)" \
+	  -m "$(QEMU_RAM)" \
+	  -drive file="$(BIOS_HDD_IMG)",format=qcow2
 
 run-uefi:
 	set -eu
@@ -796,10 +810,11 @@ run-uefi:
 	  cp "$(OVMF_VARS_TEMPLATE)" "$(UEFI_ISO_VARS)"
 	fi
 	"$(QEMU)" \
-	  -machine q35,accel=kvm \
-      -cpu host \
-      -m "$(QEMU_RAM)" \
+	  -machine q35 \
+      -accel "$(QEMU_ACCEL)" \
+      -cpu "$(QEMU_CPU)" \
       -smp "$(QEMU_CPUS)" \
+      -m "$(QEMU_RAM)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
@@ -824,10 +839,11 @@ run-uefi-install:
 	fi
 	"$(QEMU_IMG)" resize "$(UEFI_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
-	  -machine q35,accel=kvm \
-      -cpu host \
-      -m "$(QEMU_RAM)" \
+	  -machine q35 \
+      -accel "$(QEMU_ACCEL)" \
+      -cpu "$(QEMU_CPU)" \
       -smp "$(QEMU_CPUS)" \
+      -m "$(QEMU_RAM)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
@@ -853,10 +869,11 @@ run-uefi-hdd:
 	fi
 	"$(QEMU_IMG)" resize "$(UEFI_HDD_IMG)" "$(HDD_SIZE)" >/dev/null
 	"$(QEMU)" \
-	  -machine q35,accel=kvm \
-      -cpu host \
-      -m "$(QEMU_RAM)" \
+	  -machine q35 \
+      -accel "$(QEMU_ACCEL)" \
+      -cpu "$(QEMU_CPU)" \
       -smp "$(QEMU_CPUS)" \
+      -m "$(QEMU_RAM)" \
       -vga "$(QEMU_UEFI_VIDEO)" \
       -display gtk \
       -drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
@@ -880,4 +897,6 @@ help:
 	  '  make run-bios-install  run BIOS installer ISO with BIOS HDD image' \
 	  '  make run-uefi-install  run UEFI installer ISO with UEFI HDD image' \
 	  '  make run-bios-hdd  run BIOS HDD image in QEMU' \
-	  '  make run-uefi-hdd  run UEFI HDD image in QEMU'
+	  '  make run-uefi-hdd  run UEFI HDD image in QEMU' \
+	  '  QEMU auto-uses KVM on x86_64 hosts, otherwise multithreaded TCG' \
+	  '  Override with QEMU_CPUS=N, QEMU_RAM=SIZE, QEMU_ACCEL=..., QEMU_CPU=...'
