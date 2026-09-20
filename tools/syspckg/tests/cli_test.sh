@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-./syspckg --version | grep -qx '1.0'
+./syspckg --version | grep -qx '1.0 (AdavaLinux)'
 ./syspckg --help >/dev/null 2>&1
 
 ./syspckg > /tmp/syspckg-usage.out 2>&1
