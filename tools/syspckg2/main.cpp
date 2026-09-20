@@ -12,6 +12,9 @@
 #include <libdnf5/transaction/transaction_item_action.hpp>
 #include <libdnf5/utils/locker.hpp>
 
+#include <rpm/rpmlib.h>
+#include <rpm/rpmts.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -994,6 +997,61 @@ void apply_repo_selection(libdnf5::Base & base, SourceMode source) {
     }
 }
 
+void ensure_rpm_database() {
+    const std::filesystem::path rpmdb_dir{"/var/lib/rpm"};
+    const std::filesystem::path rpmdb_sqlite = rpmdb_dir / "rpmdb.sqlite";
+
+    std::error_code ec;
+    std::filesystem::create_directories(rpmdb_dir, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "Unable to create RPM database directory " + rpmdb_dir.string() + ": " + ec.message());
+    }
+
+    if (access(rpmdb_dir.c_str(), W_OK | X_OK) != 0) {
+        throw std::runtime_error(
+            "RPM database directory is not writable: " + rpmdb_dir.string());
+    }
+
+    if (std::filesystem::exists(rpmdb_sqlite)) {
+        log_info("RPM database ready: " + rpmdb_sqlite.string());
+        return;
+    }
+
+    if (geteuid() != 0) {
+        throw std::runtime_error(
+            "RPM database is not initialized; run syspckg2 once as root");
+    }
+
+    log_info("Initializing RPM package database...");
+
+    if (rpmReadConfigFiles(nullptr, nullptr) != 0) {
+        throw std::runtime_error("Failed to read RPM configuration before database initialization");
+    }
+
+    rpmts ts = rpmtsCreate();
+    if (!ts) {
+        throw std::runtime_error("Unable to create RPM transaction set for database initialization");
+    }
+
+    int rc = rpmtsSetRootDir(ts, "/");
+    if (rc == 0) {
+        rc = rpmtsInitDB(ts, 0644);
+    }
+    if (rc == 0) {
+        rc = rpmtsCloseDB(ts);
+    }
+
+    rpmtsFree(ts);
+
+    if (rc != 0 || !std::filesystem::exists(rpmdb_sqlite)) {
+        throw std::runtime_error(
+            "Failed to initialize RPM database at " + rpmdb_dir.string());
+    }
+
+    log_ok("RPM database initialized: " + rpmdb_sqlite.string());
+}
+
 void check_runtime_layout() {
     if (!std::filesystem::exists("/usr/lib/rpm/rpmrc")) {
         throw std::runtime_error("RPM configuration is missing: /usr/lib/rpm/rpmrc");
@@ -1013,6 +1071,8 @@ void check_runtime_layout() {
         throw std::runtime_error(
             "OpenPGP engine exists but cannot start; rebuild the ISO with the private GnuPG runtime");
     }
+
+    ensure_rpm_database();
 }
 
 void prepare_base(libdnf5::Base & base, SourceMode source, bool write_lock, bool load_repositories = true) {
