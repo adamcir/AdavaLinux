@@ -16,10 +16,15 @@ fi
 if command -v udhcpc >/dev/null 2>&1; then
   ip link set eth0 up 2>/dev/null || true
   sleep 1
-  (
-    while :; do
-      udhcpc -i eth0 -s /usr/share/udhcpc/default.script -n -q -T 2 -t 3 2>/dev/null && break
-      sleep 5
-    done
-  ) &
+
+  # The installer can start immediately after rcS.  Acquire one DHCP lease
+  # synchronously so package downloads never race /etc/resolv.conf creation.
+  if ! udhcpc -i eth0 -s /usr/share/udhcpc/default.script -n -q -T 2 -t 3 2>/dev/null; then
+    (
+      while :; do
+        sleep 2
+        udhcpc -i eth0 -s /usr/share/udhcpc/default.script -n -q -T 2 -t 3 2>/dev/null && break
+      done
+    ) &
+  fi
 fi
