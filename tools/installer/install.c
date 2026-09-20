@@ -742,7 +742,7 @@ int installer_run_install(const InstallerConfig *cfg,
     }
     if (installer_build_copy_grub_mkconfig_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
         shell_checked(cmd, log_fn, ctx) != 0) {
-        emit_log(log_fn, ctx, "Failed to copy grub2-mkconfig into target root");
+        emit_log(log_fn, ctx, "Missing grub2-mkconfig in target root");
         return 1;
     }
     if (installer_build_syspckg_state_cleanup_command(ROOT_MNT, cmd, sizeof(cmd)) != 0 ||
@@ -855,7 +855,7 @@ int installer_run_install(const InstallerConfig *cfg,
             return 1;
         }
         if (access(ROOT_MNT "/boot/grub/i386-pc/core.img", F_OK) != 0) {
-            emit_log(log_fn, ctx, "Missing BIOS GRUB core.img after grub-install");
+            emit_log(log_fn, ctx, "Missing BIOS GRUB core.img after grub2-install");
             return 1;
         }
     }
