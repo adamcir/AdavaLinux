@@ -240,12 +240,12 @@ private:
         });
         auto & state = downloads_.back();
 
-        if (state.repository_metadata) {
-            log_info("Fetching repository metadata: " + state.result_key);
-        } else if (interactive_terminal()) {
-            render_status_line(progress_bar(state, 0.0, total_to_download));
-        } else {
-            log_info("Fetch start: " + state.description + " (" + format_bytes(total_to_download) + ")");
+        if (!state.repository_metadata) {
+            if (interactive_terminal()) {
+                render_status_line(progress_bar(state, 0.0, total_to_download));
+            } else {
+                log_info("Fetch start: " + state.description + " (" + format_bytes(total_to_download) + ")");
+            }
         }
         return &state;
     }
@@ -291,17 +291,13 @@ private:
         switch (status) {
             case TransferStatus::SUCCESSFUL:
                 ++result.successful;
-                if (state && state->repository_metadata) {
-                    log_ok("Repository metadata fetched: " + result_key);
-                } else {
+                if (!(state && state->repository_metadata)) {
                     log_ok("Fetch complete: " + description);
                 }
                 break;
             case TransferStatus::ALREADYEXISTS:
                 ++result.successful;
-                if (state && state->repository_metadata) {
-                    log_info("Repository metadata cache hit: " + result_key);
-                } else {
+                if (!(state && state->repository_metadata)) {
                     log_info("Fetch cache hit: " + description);
                 }
                 break;
