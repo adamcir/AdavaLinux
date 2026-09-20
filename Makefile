@@ -525,13 +525,13 @@ iso:
 	# recursive cp follows an existing destination symlink, so a template file
 	# such as /usr/bin/man would otherwise overwrite the BusyBox binary itself.
 	# Remove destination entries before copying template files instead.
-	cp -a --remove-destination "$FILESFORLINUX_ROOTFS_DIR/." "$ROOTFS_DIR/"
-	cmp -s "$BUSYBOX_DIR/busybox" "$ROOTFS_DIR/bin/busybox" || \
+	cp -a --remove-destination "$$FILESFORLINUX_ROOTFS_DIR/." "$$ROOTFS_DIR/"
+	cmp -s "$$BUSYBOX_DIR/busybox" "$$ROOTFS_DIR/bin/busybox" || \
 	  die "Rootfs template copy overwrote /bin/busybox"
 	say "Copying disk initramfs templates"
 	[ -d "$$FILESFORLINUX_DISK_INITRAMFS_DIR" ] || die "disk initramfs template directory not found: $$FILESFORLINUX_DISK_INITRAMFS_DIR"
-	cp -a --remove-destination "$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$DISK_INITRAMFS_DIR/"
-	cmp -s "$BUSYBOX_DIR/busybox" "$DISK_INITRAMFS_DIR/bin/busybox" || \
+	cp -a --remove-destination "$$FILESFORLINUX_DISK_INITRAMFS_DIR/." "$$DISK_INITRAMFS_DIR/"
+	cmp -s "$$BUSYBOX_DIR/busybox" "$$DISK_INITRAMFS_DIR/bin/busybox" || \
 	  die "Disk initramfs template copy overwrote /bin/busybox"
 	for req in etc/os-release init etc/motd etc/profile etc/inittab etc/init.d/rcS usr/share/udhcpc/default.script; do
 	  [ -f "$$ROOTFS_DIR/$$req" ] || die "Required file missing in rootfs templates: $$req"
