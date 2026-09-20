@@ -239,7 +239,12 @@ static void test_default_grub_config_keeps_kms_enabled(void)
     assert(installer_build_default_grub_config("root=/dev/vda2", INSTALLER_ACPI_ON, out, sizeof(out)) == 0);
     assert(strcmp(out,
                   "GRUB_TIMEOUT=10\n"
+                  "GRUB_TIMEOUT_STYLE=menu\n"
                   "GRUB_DEFAULT=0\n"
+                  "GRUB_TERMINAL_INPUT=console\n"
+                  "GRUB_TERMINAL_OUTPUT=gfxterm\n"
+                  "GRUB_GFXMODE=1024x768x32,1024x768,800x600,auto\n"
+                  "GRUB_GFXPAYLOAD_LINUX=keep\n"
                   "GRUB_CMDLINE_LINUX=\"root=/dev/vda2 rootfstype=ext4 rootwait rootdelay=5 rw console=ttyS0 console=tty1 libata.force=noncq\"\n"
                   "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet\"\n") == 0);
     assert(strstr(out, "nomodeset") == NULL);
