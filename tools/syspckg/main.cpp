@@ -50,7 +50,7 @@ constexpr const char * COLOR_CYAN = "\033[36m";
 constexpr const char * COLOR_LIGHT_BLUE = "\033[96m";
 constexpr const char * COLOR_RESET = "\033[0m";
 
-constexpr int NETWORK_TIMEOUT_SECONDS = 5;
+constexpr int NETWORK_TIMEOUT_SECONDS = 10;
 constexpr int MAX_MIRROR_TRIES = 3;
 constexpr std::uint32_t MAX_PARALLEL_DOWNLOADS = 8;
 constexpr std::uint32_t MAX_DOWNLOADS_PER_MIRROR = 4;
