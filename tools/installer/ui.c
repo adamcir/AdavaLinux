@@ -30,7 +30,6 @@ enum {
 
 typedef struct {
     char lines[18][160];
-    int line_colors[18];
     int line_count;
     int percent;
     char step[128];
@@ -305,7 +304,6 @@ static int confirm_phrase_box(const InstallerConfig *cfg)
 static void ui_log(void *ctx, const char *line)
 {
     ProgressUi *ui = (ProgressUi *)ctx;
-    int color = C_LOG;
     int i;
 
     if (ui->log_file != NULL) {
@@ -315,14 +313,12 @@ static void ui_log(void *ctx, const char *line)
 
     if (ui->line_count < 18) {
         snprintf(ui->lines[ui->line_count], sizeof(ui->lines[0]), "%s", line);
-        ui->line_colors[ui->line_count++] = color;
+        ui->line_count++;
     } else {
         for (i = 1; i < 18; i++) {
             snprintf(ui->lines[i - 1], sizeof(ui->lines[0]), "%s", ui->lines[i]);
-            ui->line_colors[i - 1] = ui->line_colors[i];
         }
         snprintf(ui->lines[17], sizeof(ui->lines[0]), "%s", line);
-        ui->line_colors[17] = color;
     }
     if (ui->active && installer_should_redraw_progress_log(monotonicish_ms(), ui->last_draw_ms, 200)) {
         draw_progress(ui);
@@ -376,7 +372,6 @@ static void draw_progress(ProgressUi *ui)
     WINDOW *win;
     char bar[80];
     char visual_lines[64][160];
-    int visual_colors[64];
     int visual_count = 0;
     int i;
     int h = LINES > 26 ? 20 : LINES - 4;
@@ -418,7 +413,7 @@ static void draw_progress(ProgressUi *ui)
                                                    &next)) {
                 break;
             }
-            visual_colors[visual_count++] = ui->line_colors[i];
+            visual_count++;
             start = next;
         } while (ui->lines[i][start] != '\0' && visual_count < 64);
     }
