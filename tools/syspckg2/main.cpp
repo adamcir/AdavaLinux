@@ -14,6 +14,7 @@
 #include <libdnf5/utils/locker.hpp>
 
 #include <rpm/rpmlib.h>
+#include <rpm/rpmmacro.h>
 #include <rpm/rpmts.h>
 
 #include <algorithm>
@@ -1544,10 +1545,6 @@ bool transaction_contains_fedora_packages(libdnf5::base::Transaction & transacti
     return false;
 }
 
-bool fedora_bootstrap_needed(libdnf5::base::Transaction & transaction) {
-    return fedora_bootstrap_marker_missing() && transaction_contains_fedora_packages(transaction);
-}
-
 void set_bootstrap_tsflags(libdnf5::Base & base) {
     auto & option = base.get_config().get_tsflags_option();
     option.set(
@@ -1559,6 +1556,18 @@ void restore_tsflags(libdnf5::Base & base, const std::vector<std::string> & orig
     auto values = original;
     values.insert(values.begin(), "");
     base.get_config().get_tsflags_option().set(libdnf5::Option::Priority::RUNTIME, values);
+}
+
+void enable_bootstrap_rpm_overrides() {
+    // RPM 6 treats %sysusers separately from ordinary scriptlets.
+    // Defining __systemd_sysusers as empty makes runSysusers() skip it.
+    if (rpmPushMacro(nullptr, "__systemd_sysusers", nullptr, "", -1) != 0) {
+        throw std::runtime_error("Unable to disable RPM sysusers for bootstrap transaction");
+    }
+}
+
+void disable_bootstrap_rpm_overrides() noexcept {
+    (void)rpmPopMacro(nullptr, "__systemd_sysusers");
 }
 
 const std::vector<std::string> & adavalinux_core_files() {
@@ -1644,54 +1653,40 @@ void restore_adavalinux_core_files() {
 
 void activate_fedora_runtime() {
     const std::filesystem::path fedora_loader{"/usr/lib64/ld-linux-x86-64.so.2"};
-    const std::filesystem::path system_loader{"/lib64/ld-linux-x86-64.so.2"};
 
     if (!std::filesystem::exists(fedora_loader)) {
         throw std::runtime_error(
             "Fedora bootstrap completed without " + fedora_loader.string());
     }
 
-    std::error_code ec;
-    std::filesystem::create_directories(system_loader.parent_path(), ec);
-    ec.clear();
-
-    if (std::filesystem::exists(system_loader) || std::filesystem::is_symlink(system_loader)) {
-        std::filesystem::remove(system_loader, ec);
-        if (ec) {
-            throw std::runtime_error(
-                "Unable to replace system dynamic loader: " + ec.message());
-        }
-    }
-
-    std::filesystem::create_symlink(
-        "../usr/lib64/ld-linux-x86-64.so.2",
-        system_loader,
-        ec);
-    if (ec) {
+    // /lib64 is already usr-merged to /usr/lib64, so the Fedora loader is
+    // automatically visible at /lib64/ld-linux-x86-64.so.2. Do not unlink it.
+    if (!std::filesystem::is_symlink("/lib64")) {
         throw std::runtime_error(
-            "Unable to activate Fedora dynamic loader: " + ec.message());
+            "Fedora runtime requires usr-merged /lib64 -> usr/lib64");
     }
-
-    log_ok("Fedora-compatible system dynamic loader activated");
+    log_ok("Fedora-compatible system dynamic loader activated through usr-merge");
 
     const std::filesystem::path fedora_bash{"/usr/bin/bash"};
     if (std::filesystem::exists(fedora_bash)) {
-        for (const auto & shell_path : {
-                 std::filesystem::path{"/bin/sh"},
-                 std::filesystem::path{"/bin/bash"}}) {
-            ec.clear();
-            if (std::filesystem::exists(shell_path) || std::filesystem::is_symlink(shell_path)) {
-                std::filesystem::remove(shell_path, ec);
-                ec.clear();
-            }
-            std::filesystem::create_symlink("../usr/bin/bash", shell_path, ec);
+        std::error_code ec;
+        const std::filesystem::path sh_path{"/usr/bin/sh"};
+
+        if (std::filesystem::exists(sh_path) || std::filesystem::is_symlink(sh_path)) {
+            std::filesystem::remove(sh_path, ec);
             if (ec) {
-                log_warn(
-                    "Unable to point " + shell_path.string() +
-                    " to Fedora bash: " + ec.message());
-                ec.clear();
+                throw std::runtime_error(
+                    "Unable to replace /usr/bin/sh: " + ec.message());
             }
         }
+
+        // The link lives in /usr/bin, therefore "bash" is the correct target.
+        std::filesystem::create_symlink("bash", sh_path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "Unable to activate Fedora bash as /bin/sh: " + ec.message());
+        }
+
         log_ok("Fedora bash activated for future RPM scriptlets");
     } else {
         log_warn("Fedora bash is missing after bootstrap; keeping BusyBox shell");
@@ -1723,10 +1718,10 @@ void finalize_fedora_bootstrap() {
     }
 
     if (access("/usr/bin/ldconfig", X_OK) == 0) {
-        std::filesystem::create_directories("/sbin", ec);
+        std::filesystem::create_directories("/usr/sbin", ec);
         ec.clear();
-        if (!std::filesystem::exists("/sbin/ldconfig")) {
-            std::filesystem::create_symlink("../usr/bin/ldconfig", "/sbin/ldconfig", ec);
+        if (!std::filesystem::exists("/usr/sbin/ldconfig")) {
+            std::filesystem::create_symlink("../bin/ldconfig", "/usr/sbin/ldconfig", ec);
             ec.clear();
         }
         run_bootstrap_command("Rebuilding dynamic linker cache", "/usr/bin/ldconfig");
@@ -1850,7 +1845,15 @@ int run_goal(
 
     const auto resolve_started = std::chrono::steady_clock::now();
     ActivitySpinner resolve_spinner("Resolving dependencies");
-    auto transaction = goal.resolve();
+    libdnf5::base::Transaction transaction = [&]() {
+        try {
+            return goal.resolve();
+        } catch (...) {
+            resolve_spinner.stop();
+            restore_pre_resolve_flags();
+            throw;
+        }
+    }();
     resolve_spinner.stop();
     log_ok(
         "Dependencies resolved in " +
@@ -1980,9 +1983,22 @@ int run_goal(
 
         log_info("Preparing RPM transaction...");
         const auto transaction_started = std::chrono::steady_clock::now();
+
+        bool rpm_overrides_active = false;
+        if (bootstrap_mode) {
+            enable_bootstrap_rpm_overrides();
+            rpm_overrides_active = true;
+            log_info("RPM sysusers disabled for first Fedora bootstrap transaction");
+        }
+
         ActivitySpinner transaction_spinner("Running RPM transaction");
         const auto result = transaction.run();
         transaction_spinner.stop();
+
+        if (rpm_overrides_active) {
+            disable_bootstrap_rpm_overrides();
+            rpm_overrides_active = false;
+        }
 
         if (bootstrap_mode) {
             restore_tsflags(base, original_tsflags);
@@ -2006,6 +2022,7 @@ int run_goal(
         }
     } catch (const std::exception & ex) {
         if (bootstrap_mode) {
+            disable_bootstrap_rpm_overrides();
             try {
                 restore_tsflags(base, original_tsflags);
             } catch (...) {
