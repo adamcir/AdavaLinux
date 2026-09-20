@@ -47,6 +47,7 @@ constexpr const char * COLOR_RED = "\033[31m";
 constexpr const char * COLOR_YELLOW = "\033[33m";
 constexpr const char * COLOR_GREEN = "\033[32m";
 constexpr const char * COLOR_CYAN = "\033[36m";
+constexpr const char * COLOR_LIGHT_BLUE = "\033[96m";
 constexpr const char * COLOR_RESET = "\033[0m";
 
 constexpr int NETWORK_TIMEOUT_SECONDS = 5;
@@ -943,7 +944,7 @@ void banner() {
 void usage() {
     constexpr const char * prog = "syspckg";
     std::cerr
-        << COLOR_YELLOW << "Usage:" << COLOR_RESET << "\n"
+        << COLOR_LIGHT_BLUE << "Usage:" << COLOR_RESET << "\n"
         << "  " << prog << " install <package>... [--source auto|adava|fedora] [-y]\n"
         << "  " << prog << " remove <package>... [-y]\n"
         << "  " << prog << " update [package]... [--source auto|adava|fedora] [-y]\n"
