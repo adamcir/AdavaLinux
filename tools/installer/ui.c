@@ -25,8 +25,7 @@ enum {
     C_HILITE,
     C_BUTTON,
     C_ERROR,
-    C_LOG,
-    C_OK
+    C_LOG
 };
 
 typedef struct {
@@ -306,7 +305,7 @@ static int confirm_phrase_box(const InstallerConfig *cfg)
 static void ui_log(void *ctx, const char *line)
 {
     ProgressUi *ui = (ProgressUi *)ctx;
-    int color = strncmp(line, "OK:", 3) == 0 ? C_OK : C_LOG;
+    int color = C_LOG;
     int i;
 
     if (ui->log_file != NULL) {
@@ -433,15 +432,9 @@ static void draw_progress(ProgressUi *ui)
     mvwprintw(win, 6, 3, "Installation log:");
     for (i = 0; i < visual_count && i < log_rows; i++) {
         int idx = visual_count > log_rows ? visual_count - log_rows + i : i;
-        wattron(win, COLOR_PAIR(visual_colors[idx]));
-        if (visual_colors[idx] == C_OK) {
-            wattron(win, A_BOLD);
-        }
+        wattron(win, COLOR_PAIR(C_LOG));
         mvwprintw(win, 8 + i, 3, "%-*.*s", log_width, log_width, visual_lines[idx]);
-        if (visual_colors[idx] == C_OK) {
-            wattroff(win, A_BOLD);
-        }
-        wattroff(win, COLOR_PAIR(visual_colors[idx]));
+        wattroff(win, COLOR_PAIR(C_LOG));
     }
     footer("Please wait. Do not power off this machine.");
     wnoutrefresh(win);
@@ -901,7 +894,13 @@ static void init_colors(void)
     init_pair(C_BUTTON, COLOR_WHITE, COLOR_BLUE);
     init_pair(C_ERROR, COLOR_WHITE, COLOR_YELLOW);
     init_pair(C_LOG, COLOR_BLACK, COLOR_WHITE);
-    init_pair(C_OK, COLOR_GREEN, COLOR_WHITE);
+}
+
+static void clear_terminal_after_installer(void)
+{
+    endwin();
+    fputs("\033[2J\033[H", stdout);
+    fflush(stdout);
 }
 
 int installer_ui_main(void)
@@ -920,7 +919,7 @@ int installer_ui_main(void)
     refresh();
 
     if (COLS < 80 || LINES < 24) {
-        endwin();
+        clear_terminal_after_installer();
         fprintf(stderr, "Terminal must be at least 80x24.\n");
         return 1;
     }
@@ -930,6 +929,6 @@ int installer_ui_main(void)
         rc = 0;
     }
 
-    endwin();
+    clear_terminal_after_installer();
     return rc;
 }
